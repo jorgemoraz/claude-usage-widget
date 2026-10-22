@@ -1646,13 +1646,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         func text(_ t: String) {
             title.append(NSAttributedString(string: t, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
         }
+        func name(_ t: String, _ c: NSColor) {
+            title.append(NSAttributedString(string: t, attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .bold), .foregroundColor: c]))
+        }
         let session = model.rows.first { $0.id == "five_hour" } ?? model.rows.first
         icon(AppDelegate.mascotIcon)
-        text(" " + (session.map { "\(Int($0.percent.rounded()))%" } ?? "–"))
+        name(" Claude ", NSColor(red: 0.89, green: 0.52, blue: 0.38, alpha: 1))
+        text(session.map { "\(Int($0.percent.rounded()))%" } ?? "–")
         if model.showGPT, let g = model.gptRows.max(by: { $0.percent < $1.percent }) {
-            text("   ")
-            icon(AppDelegate.chatIcon)
-            text(" \(Int(g.percent.rounded()))%")
+            text("  ·  ")
+            name("GPT ", NSColor(red: 0.30, green: 0.78, blue: 0.62, alpha: 1))
+            text("\(Int(g.percent.rounded()))%")
         }
         button.image = nil
         button.attributedTitle = title
