@@ -264,6 +264,12 @@ final class UsageModel: ObservableObject {
     @Published var celebrateUntil: Date = .distantPast
     @Published var updating = false
     let version = Updater.installed.map { String($0.prefix(7)) } ?? "local"
+    @Published var layout: WidgetLayout = WidgetLayout(rawValue: UserDefaults.standard.string(forKey: "layout") ?? "") ?? .normal {
+        didSet {
+            UserDefaults.standard.set(layout.rawValue, forKey: "layout")
+            DispatchQueue.main.async { self.onChange?() }
+        }
+    }
     @Published var alwaysOnTop: Bool = UserDefaults.standard.object(forKey: "alwaysOnTop") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(alwaysOnTop, forKey: "alwaysOnTop")
@@ -424,13 +430,14 @@ struct Mascot: View {
     let mood: Mood
     let accent: Color
     let celebrating: Bool
+    var size: CGFloat = 64
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { tl in
             let t = tl.date.timeIntervalSinceReferenceDate
             Canvas { ctx, size in draw(ctx, size, t) }
         }
-        .frame(width: 64, height: 64)
+        .frame(width: size, height: size)
     }
 
     let ink = Color(red: 0.16, green: 0.10, blue: 0.09)
@@ -605,11 +612,29 @@ struct Mascot: View {
     }
 }
 
+// MARK: Formatos
+
+enum WidgetLayout: String, CaseIterable, Identifiable {
+    case mini, compacto, normal, grande, horizontal, vertical
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .mini: return "Mínima expresión"
+        case .compacto: return "Pequeño"
+        case .normal: return "Normal"
+        case .grande: return "Grande"
+        case .horizontal: return "Horizontal"
+        case .vertical: return "Vertical"
+        }
+    }
+}
+
 // MARK: Barras
 
 struct UsageBar: View {
     let percent: Double
     let pace: Double?
+    var height: CGFloat = 7
 
     var body: some View {
         GeometryReader { g in
@@ -618,7 +643,7 @@ struct UsageBar: View {
                 Capsule().fill(Color.white.opacity(0.10))
                 Capsule()
                     .fill(LinearGradient(colors: [c.opacity(0.65), c], startPoint: .leading, endPoint: .trailing))
-                    .frame(width: percent > 0 ? max(6, g.size.width * CGFloat(min(percent, 100) / 100)) : 0)
+                    .frame(width: percent > 0 ? max(height, g.size.width * CGFloat(min(percent, 100) / 100)) : 0)
                     .shadow(color: c.opacity(0.55), radius: percent >= 85 ? 4 : 0)
                 if let pace = pace {
                     // Marca de ritmo: dónde irías si repartieras el consumo de forma uniforme
@@ -630,13 +655,15 @@ struct UsageBar: View {
             }
             .animation(.spring(response: 0.9, dampingFraction: 0.75), value: percent)
         }
-        .frame(height: 7)
+        .frame(height: height)
     }
 }
 
 struct RowView: View {
     let row: UsageRow
     let now: Date
+    var k: CGFloat = 1
+    var showReset = true
 
     var pace: Double? {
         guard let r = row.resetsAt else { return nil }
@@ -646,24 +673,28 @@ struct RowView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 5 * k) {
             HStack(alignment: .firstTextBaseline) {
                 Text(row.label)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11 * k, weight: .medium))
                     .foregroundColor(.white.opacity(0.75))
-                Spacer()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Spacer(minLength: 4)
                 Text("\(Int(row.percent.rounded())) %")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13 * k, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundColor(usageColor(row.percent))
                     .contentTransition(.numericText())
                     .animation(.easeOut(duration: 0.6), value: row.percent)
             }
-            UsageBar(percent: row.percent, pace: pace)
-            if let r = row.resetsAt {
+            UsageBar(percent: row.percent, pace: pace, height: 7 * k)
+            if showReset, let r = row.resetsAt {
                 Text(resetText(r, now: now))
-                    .font(.system(size: 10))
+                    .font(.system(size: 10 * k))
                     .foregroundColor(.white.opacity(0.5))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
         }
     }
@@ -686,95 +717,224 @@ struct WidgetView: View {
         TimelineView(.periodic(from: Date(), by: 20)) { ctx in
             let mood = Mood.from(worst?.percent)
             let celebrating = model.celebrateUntil > ctx.date
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 12) {
-                    Mascot(mood: celebrating ? .feliz : mood,
-                           accent: usageColor(worst?.percent ?? 0),
-                           celebrating: celebrating)
-                    VStack(alignment: .leading, spacing: 2) {
+            let shown = celebrating ? Mood.feliz : mood
+            let radius: CGFloat = model.layout == .mini ? 14 : 18
+            content(ctx.date, mood: mood, celebrating: celebrating)
+                .background(
+                    ZStack {
+                        VisualEffect()
+                        LinearGradient(colors: [shown.tint.opacity(0.22), .clear], startPoint: .top, endPoint: .center)
+                            .animation(.easeInOut(duration: 1.2), value: mood)
+                    }
+                )
+                .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(Color.white.opacity(0.09), lineWidth: 1))
+                .contextMenu { menu }
+        }
+    }
+
+    // MARK: Piezas
+
+    func mascot(_ size: CGFloat, _ mood: Mood, _ celebrating: Bool) -> some View {
+        Mascot(mood: celebrating ? .feliz : mood, accent: usageColor(worst?.percent ?? 0),
+               celebrating: celebrating, size: size)
+    }
+
+    func statusText(_ now: Date) -> String {
+        model.updating ? "instalando versión nueva…" : model.loading ? "actualizando…" : (model.lastUpdate.map { agoText($0, now: now) } ?? "")
+    }
+
+    func phraseText(_ mood: Mood, _ celebrating: Bool, _ now: Date, k: CGFloat, center: Bool = false) -> some View {
+        Text(celebrating ? "¡Energía recargada!" : phrase(mood, now))
+            .font(.system(size: 13 * k, weight: .semibold, design: .rounded))
+            .foregroundColor(.white.opacity(0.95))
+            .multilineTextAlignment(center ? .center : .leading)
+            .lineLimit(center ? 2 : 1)
+            .minimumScaleFactor(0.75)
+    }
+
+    @ViewBuilder
+    func bigPercent(k: CGFloat, label: String = "% de la sesión") -> some View {
+        if let s = session {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("\(Int(s.percent.rounded()))")
+                    .font(.system(size: 26 * k, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundColor(usageColor(s.percent))
+                    .contentTransition(.numericText())
+                    .animation(.easeOut(duration: 0.6), value: s.percent)
+                Text(label)
+                    .font(.system(size: 10 * k, weight: .medium))
+                    .foregroundColor(.white.opacity(0.55))
+            }
+        }
+    }
+
+    @ViewBuilder
+    func comeback(_ mood: Mood, _ celebrating: Bool, _ now: Date, k: CGFloat) -> some View {
+        if mood == .agotado, let r = worst?.resetsAt, !celebrating {
+            Text("Vuelvo a las \(hourText(r, now: now))")
+                .font(.system(size: 10 * k, weight: .medium))
+                .foregroundColor(.white.opacity(0.6))
+        }
+    }
+
+    @ViewBuilder
+    func rows(_ now: Date, k: CGFloat, showReset: Bool = true) -> some View {
+        if model.rows.isEmpty {
+            Text(model.error ?? "Cargando…")
+                .font(.system(size: 11 * k))
+                .foregroundColor(.white.opacity(0.7))
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            ForEach(model.rows) { RowView(row: $0, now: now, k: k, showReset: showReset) }
+            if let e = model.error {
+                Text("⚠︎ \(e)")
+                    .font(.system(size: 10 * k))
+                    .foregroundColor(Color(red: 1, green: 0.7, blue: 0.4))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: Formatos
+
+    @ViewBuilder
+    func content(_ now: Date, mood: Mood, celebrating: Bool) -> some View {
+        switch model.layout {
+        case .mini:
+            HStack(spacing: 6) {
+                mascot(34, mood, celebrating)
+                if let s = session {
+                    Text("\(Int(s.percent.rounded()))%")
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(usageColor(s.percent))
+                        .contentTransition(.numericText())
+                        .animation(.easeOut(duration: 0.6), value: s.percent)
+                }
+            }
+            .padding(.vertical, 6)
+            .padding(.leading, 6)
+            .padding(.trailing, 12)
+
+        case .compacto:
+            HStack(spacing: 10) {
+                mascot(46, mood, celebrating)
+                VStack(alignment: .leading, spacing: 2) {
+                    phraseText(mood, celebrating, now, k: 0.9)
+                    bigPercent(k: 0.8, label: "% sesión")
+                    if let w = model.rows.first(where: { $0.id == "seven_day" }) {
+                        HStack(spacing: 5) {
+                            Text("Semana").font(.system(size: 9)).foregroundColor(.white.opacity(0.5))
+                            UsageBar(percent: w.percent, pace: nil, height: 4)
+                            Text("\(Int(w.percent.rounded()))%")
+                                .font(.system(size: 9, weight: .semibold)).monospacedDigit()
+                                .foregroundColor(usageColor(w.percent))
+                        }
+                    }
+                }
+            }
+            .padding(10)
+            .frame(width: 220)
+
+        case .normal, .grande:
+            let k: CGFloat = model.layout == .grande ? 1.35 : 1
+            VStack(alignment: .leading, spacing: 12 * k) {
+                HStack(alignment: .center, spacing: 12 * k) {
+                    mascot(64 * k, mood, celebrating)
+                    VStack(alignment: .leading, spacing: 2 * k) {
                         HStack {
                             Text("USO DE CLAUDE")
-                                .font(.system(size: 9, weight: .bold))
+                                .font(.system(size: 9 * k, weight: .bold))
                                 .tracking(0.8)
                                 .foregroundColor(.white.opacity(0.45))
                             Spacer()
-                            Text(model.updating ? "instalando versión nueva…" : model.loading ? "actualizando…" : (model.lastUpdate.map { agoText($0, now: ctx.date) } ?? ""))
-                                .font(.system(size: 9))
+                            Text(statusText(now))
+                                .font(.system(size: 9 * k))
                                 .foregroundColor(.white.opacity(0.4))
                         }
-                        Text(celebrating ? "¡Energía recargada!" : phrase(mood, ctx.date))
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundColor(.white.opacity(0.95))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                        if let s = session {
-                            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                                Text("\(Int(s.percent.rounded()))")
-                                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundColor(usageColor(s.percent))
-                                    .contentTransition(.numericText())
-                                    .animation(.easeOut(duration: 0.6), value: s.percent)
-                                Text("% de la sesión")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.55))
-                            }
-                        }
-                        if mood == .agotado, let r = worst?.resetsAt, !celebrating {
-                            Text("Vuelvo a las \(hourText(r, now: ctx.date))")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(.white.opacity(0.6))
-                        }
+                        phraseText(mood, celebrating, now, k: k)
+                        bigPercent(k: k)
+                        comeback(mood, celebrating, now, k: k)
                     }
                 }
+                rows(now, k: k)
+            }
+            .padding(14 * k)
+            .frame(width: 290 * k)
 
+        case .horizontal:
+            HStack(alignment: .center, spacing: 16) {
+                mascot(54, mood, celebrating)
+                VStack(alignment: .leading, spacing: 2) {
+                    phraseText(mood, celebrating, now, k: 1)
+                    bigPercent(k: 0.9)
+                    comeback(mood, celebrating, now, k: 1)
+                }
+                .frame(width: 150, alignment: .leading)
                 if model.rows.isEmpty {
-                    Text(model.error ?? "Cargando…")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.7))
-                        .fixedSize(horizontal: false, vertical: true)
+                    rows(now, k: 1).frame(width: 220)
                 } else {
-                    ForEach(model.rows) { RowView(row: $0, now: ctx.date) }
-                    if let e = model.error {
-                        Text("⚠︎ \(e)")
-                            .font(.system(size: 10))
-                            .foregroundColor(Color(red: 1, green: 0.7, blue: 0.4))
-                            .fixedSize(horizontal: false, vertical: true)
+                    ForEach(model.rows) { r in
+                        Divider().frame(height: 44).overlay(Color.white.opacity(0.1))
+                        RowView(row: r, now: now, k: 1).frame(width: 190)
                     }
                 }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+        case .vertical:
+            VStack(alignment: .center, spacing: 10) {
+                mascot(68, mood, celebrating)
+                phraseText(mood, celebrating, now, k: 0.95, center: true)
+                if let s = session {
+                    VStack(spacing: 0) {
+                        Text("\(Int(s.percent.rounded()))%")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundColor(usageColor(s.percent))
+                            .contentTransition(.numericText())
+                            .animation(.easeOut(duration: 0.6), value: s.percent)
+                        Text("de la sesión").font(.system(size: 10)).foregroundColor(.white.opacity(0.55))
+                    }
+                }
+                comeback(mood, celebrating, now, k: 1)
+                VStack(alignment: .leading, spacing: 10) {
+                    rows(now, k: 0.9, showReset: false)
+                }
+                Text(statusText(now)).font(.system(size: 9)).foregroundColor(.white.opacity(0.4))
             }
             .padding(14)
-            .frame(width: 290)
-            .background(
-                ZStack {
-                    VisualEffect()
-                    LinearGradient(colors: [(celebrating ? Mood.feliz : mood).tint.opacity(0.22), .clear],
-                                   startPoint: .top, endPoint: .center)
-                        .animation(.easeInOut(duration: 1.2), value: mood)
-                }
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.09), lineWidth: 1))
-            .contextMenu {
-                Button("Actualizar ahora") { model.refresh() }
-                Button(model.alwaysOnTop ? "✓ Siempre por encima" : "Siempre por encima") { model.alwaysOnTop.toggle() }
-                Button("Abrir uso en claude.ai") {
-                    NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!)
-                }
-                Divider()
-                Button("Configurar sessionKey de claude.ai…") { actions.setKey() }
-                Button("Borrar sessionKey") { actions.clearKey() }
-                if !model.source.isEmpty {
-                    Button("Origen: \(model.source)") {}.disabled(true)
-                }
-                Divider()
-                Button("Buscar actualizaciones") { model.checkForUpdate() }
-                Button("Versión \(model.version)") {}.disabled(true)
-                Divider()
-                Button("Salir") { actions.quit() }
+            .frame(width: 160)
+        }
+    }
+
+    @ViewBuilder
+    var menu: some View {
+        Menu("Tamaño") {
+            ForEach(WidgetLayout.allCases) { l in
+                Button((model.layout == l ? "✓ " : "") + l.title) { model.layout = l }
             }
         }
+        Button("Actualizar ahora") { model.refresh() }
+        Button(model.alwaysOnTop ? "✓ Siempre por encima" : "Siempre por encima") { model.alwaysOnTop.toggle() }
+        Button("Abrir uso en claude.ai") {
+            NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!)
+        }
+        Divider()
+        Button("Configurar sessionKey de claude.ai…") { actions.setKey() }
+        Button("Borrar sessionKey") { actions.clearKey() }
+        if !model.source.isEmpty {
+            Button("Origen: \(model.source)") {}.disabled(true)
+        }
+        Divider()
+        Button("Buscar actualizaciones") { model.checkForUpdate() }
+        Button("Versión \(model.version)") {}.disabled(true)
+        Divider()
+        Button("Salir") { actions.quit() }
     }
 
     func phrase(_ mood: Mood, _ now: Date) -> String {
@@ -815,22 +975,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = UsageModel()
     var panel: FloatingPanel!
     var hosting: DraggableHostingView<WidgetView>!
-    var followTimer: Timer?
-    var currentScreenID: CGDirectDisplayID?
     var movingProgrammatically = false
-
-    // Distancia del widget a la esquina superior derecha del área útil de la pantalla
-    var offset: CGPoint {
-        get {
-            let d = UserDefaults.standard
-            return CGPoint(x: d.object(forKey: "offsetX") as? Double ?? 20,
-                           y: d.object(forKey: "offsetY") as? Double ?? 20)
-        }
-        set {
-            UserDefaults.standard.set(Double(newValue.x), forKey: "offsetX")
-            UserDefaults.standard.set(Double(newValue.y), forKey: "offsetY")
-        }
-    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let actions = WidgetActions(
@@ -848,99 +993,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.contentView = hosting
         panel.setContentSize(widgetSize())
         applyLevel()
-
-        if let screen = activeScreen() { place(on: screen) }
+        restorePosition()
         panel.orderFrontRegardless()
 
         NotificationCenter.default.addObserver(self, selector: #selector(panelMoved),
                                                name: NSWindow.didMoveNotification, object: panel)
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(follow),
-                                                          name: NSWorkspace.didActivateApplicationNotification, object: nil)
-        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(follow),
-                                                          name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
-        // También cubre mover una ventana de un monitor a otro sin cambiar de app
-        followTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in self?.follow() }
 
-        model.onChange = { [weak self] in DispatchQueue.main.async { self?.resizeKeepingTop() } }
+        model.onChange = { [weak self] in DispatchQueue.main.async { self?.resizeKeepingTopLeft() } }
         model.onLevelChange = { [weak self] in self?.applyLevel() }
         model.start()
     }
 
-    // MARK: Seguir al monitor activo
+    // MARK: Posición libre (se recuerda dónde lo dejas)
 
-    func displayID(_ s: NSScreen) -> CGDirectDisplayID? {
-        (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    func isOnScreen(_ f: NSRect) -> Bool {
+        NSScreen.screens.contains { $0.visibleFrame.intersects(f.insetBy(dx: 20, dy: 20)) }
     }
 
-    /// Pantalla donde está la ventana con la que trabajas; si no se puede saber, la del ratón.
-    func activeScreen() -> NSScreen? {
-        if let app = NSWorkspace.shared.frontmostApplication,
-           app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-           let rect = frontWindowRect(pid: app.processIdentifier) {
-            var best: NSScreen?
-            var bestArea: CGFloat = 0
-            for s in NSScreen.screens {
-                let i = s.frame.intersection(rect)
-                let area = i.isNull ? 0 : i.width * i.height
-                if area > bestArea { bestArea = area; best = s }
-            }
-            if let best = best { return best }
+    func restorePosition() {
+        let d = UserDefaults.standard
+        if let x = d.object(forKey: "posX") as? Double, let top = d.object(forKey: "posTop") as? Double {
+            let size = panel.frame.size
+            let f = NSRect(x: x, y: top - size.height, width: size.width, height: size.height)
+            if isOnScreen(f) { return setOrigin(f.origin) }
         }
-        let mouse = NSEvent.mouseLocation
-        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+        placeDefault()
     }
 
-    /// Marco (en coordenadas de Cocoa) de la ventana delantera de una app.
-    func frontWindowRect(pid: pid_t) -> NSRect? {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
-                                                    kCGNullWindowID) as? [[String: Any]],
-              let primary = NSScreen.screens.first else { return nil }
-        for info in list {
-            guard (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-                  (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
-                  let b = info[kCGWindowBounds as String] as? NSDictionary,
-                  let r = CGRect(dictionaryRepresentation: b),
-                  r.width > 80, r.height > 80 else { continue }
-            return NSRect(x: r.minX, y: primary.frame.maxY - r.maxY, width: r.width, height: r.height)
-        }
-        return nil
+    func placeDefault() {
+        guard let vf = NSScreen.main?.visibleFrame else { return }
+        let size = panel.frame.size
+        setOrigin(NSPoint(x: vf.maxX - size.width - 20, y: vf.maxY - size.height - 20))
+        savePosition()
     }
 
-    @objc func follow() {
-        guard let screen = activeScreen(), let id = displayID(screen) else { return }
-        if id != currentScreenID { place(on: screen) }
-        if !panel.isVisible { panel.orderFrontRegardless() }
+    func setOrigin(_ p: NSPoint) {
+        movingProgrammatically = true
+        panel.setFrameOrigin(p)
+        movingProgrammatically = false
+    }
+
+    func savePosition() {
+        UserDefaults.standard.set(Double(panel.frame.minX), forKey: "posX")
+        UserDefaults.standard.set(Double(panel.frame.maxY), forKey: "posTop")
+    }
+
+    @objc func panelMoved() {
+        guard !movingProgrammatically else { return }
+        savePosition()
     }
 
     @objc func screensChanged() {
-        currentScreenID = nil
-        follow()
-    }
-
-    func place(on screen: NSScreen) {
-        let vf = screen.visibleFrame
-        let size = panel.frame.size
-        let o = offset
-        var x = vf.maxX - size.width - o.x
-        var y = vf.maxY - size.height - o.y
-        x = min(max(x, vf.minX), vf.maxX - size.width)
-        y = min(max(y, vf.minY), vf.maxY - size.height)
-        movingProgrammatically = true
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
-        movingProgrammatically = false
-        currentScreenID = displayID(screen)
-        panel.orderFrontRegardless()
-    }
-
-    /// Al arrastrarlo, guarda la nueva posición relativa para todas las pantallas.
-    @objc func panelMoved() {
-        guard !movingProgrammatically,
-              let screen = panel.screen ?? NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) }) else { return }
-        let vf = screen.visibleFrame
-        offset = CGPoint(x: max(0, vf.maxX - panel.frame.maxX), y: max(0, vf.maxY - panel.frame.maxY))
-        currentScreenID = displayID(screen)
+        if !isOnScreen(panel.frame) { placeDefault() }
     }
 
     // MARK: Ventana
@@ -958,10 +1064,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func widgetSize() -> NSSize {
         hosting.layoutSubtreeIfNeeded()
         let s = hosting.fittingSize
-        return NSSize(width: max(s.width, 290), height: max(s.height, 90))
+        return NSSize(width: max(s.width, 60), height: max(s.height, 40))
     }
 
-    func resizeKeepingTop() {
+    /// Al cambiar de tamaño mantiene fija la esquina superior izquierda
+    func resizeKeepingTopLeft() {
         let size = widgetSize()
         var f = panel.frame
         let top = f.maxY
