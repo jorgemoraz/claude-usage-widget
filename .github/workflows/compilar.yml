@@ -1,0 +1,9 @@
+name: Compilar
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcrun swiftc -O main.swift -o ClaudeUsage
+      - run: bash -n instalar.sh
