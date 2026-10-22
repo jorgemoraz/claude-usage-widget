@@ -253,6 +253,84 @@ enum Updater {
     }
 }
 
+// MARK: - ChatGPT (límites de Codex)
+
+/// Lee los límites de uso del plan de ChatGPT a través de la sesión de Codex del Mac.
+/// Es un endpoint interno de OpenAI (el que usa el /status de Codex): puede cambiar sin aviso.
+enum CodexAPI {
+    static var authFile: URL {
+        let env = ProcessInfo.processInfo.environment["CODEX_HOME"]
+        let base = env.map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        return base.appendingPathComponent("auth.json")
+    }
+
+    static var available: Bool { FileManager.default.fileExists(atPath: authFile.path) }
+
+    enum CodexError: LocalizedError {
+        case noLogin, expired, http(Int), badData
+        var errorDescription: String? {
+            switch self {
+            case .noLogin: return "Inicia sesión en Codex con tu cuenta de ChatGPT para ver este uso."
+            case .expired: return "Sesión de Codex caducada: abre Codex un momento para renovarla."
+            case .http(let c): return "ChatGPT respondió con un error \(c)."
+            case .badData: return "Respuesta inesperada de ChatGPT."
+            }
+        }
+    }
+
+    static func credentials() -> (token: String, account: String?)? {
+        guard let data = try? Data(contentsOf: authFile),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let tokens = obj["tokens"] as? [String: Any],
+              let token = tokens["access_token"] as? String, !token.isEmpty else { return nil }
+        return (token, tokens["account_id"] as? String)
+    }
+
+    static func fetch(_ completion: @escaping (Result<[UsageRow], Error>) -> Void) {
+        guard let c = credentials() else { return completion(.failure(CodexError.noLogin)) }
+        var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!,
+                             cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        req.httpShouldHandleCookies = false
+        req.setValue("Bearer \(c.token)", forHTTPHeaderField: "Authorization")
+        if let a = c.account { req.setValue(a, forHTTPHeaderField: "chatgpt-account-id") }
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("codex_cli_rs", forHTTPHeaderField: "originator")
+        req.setValue("codex_cli_rs", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: req) { data, resp, err in
+            if let err = err { return completion(.failure(err)) }
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 401 { return completion(.failure(CodexError.expired)) }
+            guard (200..<300).contains(code), let data = data else { return completion(.failure(CodexError.http(code))) }
+            completion(Result { try parse(data) })
+        }.resume()
+    }
+
+    static func parse(_ data: Data) throws -> [UsageRow] {
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rl = obj["rate_limit"] as? [String: Any] else { throw CodexError.badData }
+        var rows: [UsageRow] = []
+        for key in ["primary_window", "secondary_window"] {
+            guard let w = rl[key] as? [String: Any],
+                  let used = (w["used_percent"] as? NSNumber)?.doubleValue else { continue }
+            let span = (w["limit_window_seconds"] as? NSNumber)?.doubleValue ?? (key == "primary_window" ? 18000 : 604800)
+            var reset: Date?
+            if let at = (w["reset_at"] as? NSNumber)?.doubleValue {
+                reset = Date(timeIntervalSince1970: at)
+            } else if let after = (w["reset_after_seconds"] as? NSNumber)?.doubleValue {
+                reset = Date().addingTimeInterval(after)
+            }
+            let label: String
+            if span >= 6 * 86400 { label = "Semana" }
+            else if abs(span - 18000) < 60 { label = "Sesión (5 h)" }
+            else { label = "Ventana de \(Int((span / 3600).rounded())) h" }
+            rows.append(UsageRow(id: "gpt_" + key, label: label, percent: used, resetsAt: reset, window: span))
+        }
+        if rows.isEmpty { throw CodexError.badData }
+        return rows
+    }
+}
+
 // MARK: - Estado
 
 final class UsageModel: ObservableObject {
@@ -262,6 +340,15 @@ final class UsageModel: ObservableObject {
     @Published var lastUpdate: Date?
     @Published var source = ""
     @Published var celebrateUntil: Date = .distantPast
+    @Published var gptRows: [UsageRow] = []
+    @Published var gptError: String?
+    @Published var showGPT: Bool = UserDefaults.standard.object(forKey: "showGPT") as? Bool ?? CodexAPI.available {
+        didSet {
+            UserDefaults.standard.set(showGPT, forKey: "showGPT")
+            if showGPT { refreshGPT() }
+            DispatchQueue.main.async { self.onChange?() }
+        }
+    }
     @Published var updating = false
     let version = Updater.installed.map { String($0.prefix(7)) } ?? "local"
     @Published var layout: WidgetLayout = WidgetLayout(rawValue: UserDefaults.standard.string(forKey: "layout") ?? "") ?? .normal {
@@ -308,7 +395,23 @@ final class UsageModel: ObservableObject {
         }
     }
 
+    func refreshGPT() {
+        guard showGPT else { return }
+        DispatchQueue.global(qos: .utility).async {
+            CodexAPI.fetch { r in
+                DispatchQueue.main.async {
+                    switch r {
+                    case .success(let rows): self.gptRows = rows; self.gptError = nil
+                    case .failure(let e): self.gptError = e.localizedDescription
+                    }
+                    self.onChange?()
+                }
+            }
+        }
+    }
+
     func refresh() {
+        refreshGPT()
         guard !loading else { return }
         loading = true
         DispatchQueue.global(qos: .utility).async {
@@ -836,6 +939,30 @@ struct WidgetView: View {
         }
     }
 
+    @ViewBuilder
+    func gptSection(_ now: Date, k: CGFloat, showReset: Bool = true) -> some View {
+        if model.showGPT && (!model.gptRows.isEmpty || model.gptError != nil) {
+            VStack(alignment: .leading, spacing: 8 * k) {
+                HStack(spacing: 6) {
+                    Text("CHATGPT")
+                        .font(.system(size: 9 * k, weight: .bold))
+                        .tracking(0.8)
+                        .foregroundColor(.white.opacity(0.45))
+                    Rectangle().fill(Color.white.opacity(0.12)).frame(height: 0.5)
+                }
+                ForEach(model.gptRows) { RowView(row: $0, now: now, k: k, showReset: showReset) }
+                if let e = model.gptError {
+                    Text(model.gptRows.isEmpty ? e : "⚠︎ \(e)")
+                        .font(.system(size: 10 * k))
+                        .foregroundColor(model.gptRows.isEmpty ? .white.opacity(0.6) : Color(red: 1, green: 0.7, blue: 0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    var gptHeadline: UsageRow? { model.gptRows.max { $0.percent < $1.percent } }
+
     // MARK: Formatos
 
     @ViewBuilder
@@ -851,6 +978,12 @@ struct WidgetView: View {
                         .foregroundColor(usageColor(s.percent))
                         .contentTransition(.numericText())
                         .animation(.easeOut(duration: 0.6), value: s.percent)
+                }
+                if model.showGPT, let g = gptHeadline {
+                    Text("· GPT \(Int(g.percent.rounded()))%")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(.white.opacity(0.6))
                 }
             }
             .padding(.vertical, 6)
@@ -870,6 +1003,15 @@ struct WidgetView: View {
                             Text("\(Int(w.percent.rounded()))%")
                                 .font(.system(size: 9, weight: .semibold)).monospacedDigit()
                                 .foregroundColor(usageColor(w.percent))
+                        }
+                    }
+                    if model.showGPT, let g = gptHeadline {
+                        HStack(spacing: 5) {
+                            Text("ChatGPT").font(.system(size: 9)).foregroundColor(.white.opacity(0.5))
+                            UsageBar(percent: g.percent, pace: nil, height: 4)
+                            Text("\(Int(g.percent.rounded()))%")
+                                .font(.system(size: 9, weight: .semibold)).monospacedDigit()
+                                .foregroundColor(usageColor(g.percent))
                         }
                     }
                 }
@@ -899,6 +1041,7 @@ struct WidgetView: View {
                     }
                 }
                 rows(now, k: k)
+                gptSection(now, k: k)
             }
             .padding(14 * k)
             .frame(width: 290 * k)
@@ -918,6 +1061,14 @@ struct WidgetView: View {
                     ForEach(model.rows) { r in
                         Divider().frame(height: 44).overlay(Color.white.opacity(0.1))
                         RowView(row: r, now: now, k: 1).frame(width: 190)
+                    }
+                }
+                if model.showGPT {
+                    ForEach(model.gptRows) { r in
+                        Divider().frame(height: 44).overlay(Color.white.opacity(0.1))
+                        RowView(row: UsageRow(id: r.id, label: "ChatGPT · " + r.label, percent: r.percent,
+                                              resetsAt: r.resetsAt, window: r.window), now: now, k: 1)
+                            .frame(width: 190)
                     }
                 }
             }
@@ -942,6 +1093,7 @@ struct WidgetView: View {
                 comeback(mood, celebrating, now, k: 1)
                 VStack(alignment: .leading, spacing: 10) {
                     rows(now, k: 0.9, showReset: false)
+                    gptSection(now, k: 0.9, showReset: false)
                 }
                 Text(statusText(now)).font(.system(size: 9)).foregroundColor(.white.opacity(0.4))
             }
@@ -958,6 +1110,7 @@ struct WidgetView: View {
             }
         }
         Button("Actualizar ahora") { model.refresh() }
+        Button(model.showGPT ? "✓ Mostrar ChatGPT" : "Mostrar ChatGPT") { model.showGPT.toggle() }
         Button(model.alwaysOnTop ? "✓ Siempre por encima" : "Siempre por encima") { model.alwaysOnTop.toggle() }
         Button("Abrir uso en claude.ai") {
             NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!)
