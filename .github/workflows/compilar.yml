@@ -10,4 +10,4 @@ jobs:
       - name: Prueba de tamaño
         run: |
           defaults write ClaudeUsage zoom -float 1 || true
-          WIDGET_SELFTEST=1 timeout 30 ./ClaudeUsage || true
+          (WIDGET_SELFTEST=1 ./ClaudeUsage > test.log 2>&1 &) ; sleep 12; cat test.log; pkill ClaudeUsage || true
