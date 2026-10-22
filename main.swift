@@ -1650,14 +1650,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title.append(NSAttributedString(string: t, attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .bold), .foregroundColor: c]))
         }
-        let session = model.rows.first { $0.id == "five_hour" } ?? model.rows.first
+        func small(_ t: String) {
+            title.append(NSAttributedString(string: t, attributes: [
+                .font: NSFont.systemFont(ofSize: 10, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor]))
+        }
+        func pct(_ r: UsageRow?) -> String { r.map { "\(Int($0.percent.rounded()))%" } ?? "–" }
+        // Semana / horas (ventana de 5 h)
+        func pair(_ rows: [UsageRow]) {
+            small("sem ")
+            text(pct(rows.first { $0.window >= 6 * 86400 }))
+            small("  5h ")
+            text(pct(rows.first { $0.window < 6 * 86400 }))
+        }
         icon(AppDelegate.mascotIcon)
         name(" Claude ", NSColor(red: 0.89, green: 0.52, blue: 0.38, alpha: 1))
-        text(session.map { "\(Int($0.percent.rounded()))%" } ?? "–")
-        if model.showGPT, let g = model.gptRows.max(by: { $0.percent < $1.percent }) {
-            text("  ·  ")
+        pair(model.rows)
+        if model.showGPT, !model.gptRows.isEmpty {
+            text("   ")
             name("GPT ", NSColor(red: 0.30, green: 0.78, blue: 0.62, alpha: 1))
-            text("\(Int(g.percent.rounded()))%")
+            pair(model.gptRows)
         }
         button.image = nil
         button.attributedTitle = title
