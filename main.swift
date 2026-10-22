@@ -376,15 +376,45 @@ func agoText(_ date: Date, now: Date) -> String {
     return m < 1 ? "ahora" : "hace \(m) min"
 }
 
-struct VisualEffect: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
+/// Fondo de cristal: Liquid Glass nativo en macOS 26 y, en versiones anteriores,
+/// desenfoque con máscara redondeada real (para que las esquinas no se vean cuadradas).
+struct GlassBackground: NSViewRepresentable {
+    let radius: CGFloat
+
+    func makeNSView(context: Context) -> NSView {
+        if #available(macOS 26.0, *) {
+            let g = NSGlassEffectView()
+            g.cornerRadius = radius
+            g.tintColor = NSColor.black.withAlphaComponent(0.28)
+            return g
+        }
         let v = NSVisualEffectView()
         v.material = .hudWindow
         v.blendingMode = .behindWindow
         v.state = .active
+        v.maskImage = GlassBackground.mask(radius)
         return v
     }
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if #available(macOS 26.0, *), let g = nsView as? NSGlassEffectView {
+            g.cornerRadius = radius
+        } else if let v = nsView as? NSVisualEffectView {
+            v.maskImage = GlassBackground.mask(radius)
+        }
+    }
+
+    static func mask(_ r: CGFloat) -> NSImage {
+        let side = r * 2 + 1
+        let img = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: r, yRadius: r).fill()
+            return true
+        }
+        img.capInsets = NSEdgeInsets(top: r, left: r, bottom: r, right: r)
+        img.resizingMode = .stretch
+        return img
+    }
 }
 
 // MARK: Estado de ánimo
@@ -718,18 +748,26 @@ struct WidgetView: View {
             let mood = Mood.from(worst?.percent)
             let celebrating = model.celebrateUntil > ctx.date
             let shown = celebrating ? Mood.feliz : mood
-            let radius: CGFloat = model.layout == .mini ? 14 : 18
+            let radius: CGFloat = model.layout == .mini ? 23 : 22
+            let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
             content(ctx.date, mood: mood, celebrating: celebrating)
                 .background(
                     ZStack {
-                        VisualEffect()
-                        LinearGradient(colors: [shown.tint.opacity(0.22), .clear], startPoint: .top, endPoint: .center)
+                        GlassBackground(radius: radius)
+                        // Un toque del color del ánimo, muy sutil, como luz dentro del cristal
+                        LinearGradient(colors: [shown.tint.opacity(0.16), .clear], startPoint: .top, endPoint: .center)
                             .animation(.easeInOut(duration: 1.2), value: mood)
                     }
+                    .clipShape(shape)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .stroke(Color.white.opacity(0.09), lineWidth: 1))
+                // Brillo del canto superior, como en el cristal de Apple
+                .overlay(shape.strokeBorder(
+                    LinearGradient(colors: [.white.opacity(0.55), .white.opacity(0.10), .white.opacity(0.22)],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 1))
+                // Filo exterior oscuro finísimo: define el borde sobre fondos blancos
+                .overlay(shape.stroke(Color.black.opacity(0.18), lineWidth: 0.5))
+                .padding(1)
                 .contextMenu { menu }
         }
     }
@@ -1076,6 +1114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         f.origin.y = top - size.height
         movingProgrammatically = true
         panel.setFrame(f, display: true)
+        panel.invalidateShadow()
         movingProgrammatically = false
     }
 
