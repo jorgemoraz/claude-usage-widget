@@ -7,3 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: xcrun swiftc -O main.swift -o ClaudeUsage
       - run: bash -n instalar.sh
+      - name: Prueba de tamaño
+        run: |
+          defaults write ClaudeUsage zoom -float 1 || true
+          WIDGET_SELFTEST=1 timeout 30 ./ClaudeUsage || true

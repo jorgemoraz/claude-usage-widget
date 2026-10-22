@@ -1507,6 +1507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.onSize = { [weak self] size in DispatchQueue.main.async { self?.setSizeKeepingTopLeft(size) } }
         model.onLevelChange = { [weak self] in self?.applyLevel() }
         WebSession.shared.onLogin = { [weak self] in self?.model.refresh() }
+        if ProcessInfo.processInfo.environment["WIDGET_SELFTEST"] != nil { return selfTest() }
         model.start()
     }
 
@@ -1583,6 +1584,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setFrame(f, display: true)
         panel.invalidateShadow()
         movingProgrammatically = false
+    }
+
+    /// Prueba automática (solo en GitHub Actions): mide la ventana antes y después de agrandar
+    func selfTest() {
+        func report(_ tag: String) {
+            print("[\(tag)] zoom=\(model.zoom) ventana=\(panel.frame.size) fitting=\(hosting.fittingSize)")
+            fflush(stdout)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { report("inicio") ; self.model.zoomIn(); self.model.zoomIn() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { report("tras +2") ; self.model.zoomOut() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { report("tras -1") ; exit(0) }
     }
 
     // MARK: Barra de menús
