@@ -425,7 +425,16 @@ enum CodexAPI {
         return (token, tokens["account_id"] as? String)
     }
 
+    /// Intenta la API y, si falla, lee los límites que Codex apunta en sus registros locales.
     static func fetch(_ completion: @escaping (Result<[UsageRow], Error>) -> Void) {
+        fetchAPI { r in
+            if case .success = r { return completion(r) }
+            if let rows = CodexLog.latest() { return completion(.success(rows)) }
+            completion(r)
+        }
+    }
+
+    static func fetchAPI(_ completion: @escaping (Result<[UsageRow], Error>) -> Void) {
         guard let c = credentials() else { return completion(.failure(CodexError.noLogin)) }
         var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!,
                              cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
@@ -466,6 +475,55 @@ enum CodexAPI {
         }
         if rows.isEmpty { throw CodexError.badData }
         return rows
+    }
+}
+
+/// Codex guarda en cada sesión (~/.codex/sessions/…/rollout-*.jsonl) los límites del plan
+/// que le devuelve OpenAI. Se lee solo el último registro de límites, nada de las conversaciones.
+enum CodexLog {
+    static var sessionsDir: URL { CodexAPI.authFile.deletingLastPathComponent().appendingPathComponent("sessions") }
+
+    static func newestFile() -> URL? {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(at: sessionsDir, includingPropertiesForKeys: [.contentModificationDateKey],
+                                     options: [.skipsHiddenFiles]) else { return nil }
+        var best: (URL, Date)?
+        for case let u as URL in en where u.lastPathComponent.hasPrefix("rollout-") && u.pathExtension == "jsonl" {
+            let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if best == nil || d > best!.1 { best = (u, d) }
+        }
+        return best?.0
+    }
+
+    static func latest() -> [UsageRow]? {
+        guard let file = newestFile(), let h = try? FileHandle(forReadingFrom: file) else { return nil }
+        defer { try? h.close() }
+        let size = (try? h.seekToEnd()) ?? 0
+        let chunk: UInt64 = 512 * 1024
+        try? h.seek(toOffset: size > chunk ? size - chunk : 0)
+        guard let data = try? h.readToEnd(), let text = String(data: data, encoding: .utf8) else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
+            guard let obj = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
+                  let payload = obj["payload"] as? [String: Any],
+                  let rl = payload["rate_limits"] as? [String: Any] else { continue }
+            let stamp = (obj["timestamp"] as? String).flatMap { iso.date(from: $0) } ?? Date()
+            var rows: [UsageRow] = []
+            for key in ["primary", "secondary"] {
+                guard let w = rl[key] as? [String: Any],
+                      var used = (w["used_percent"] as? NSNumber)?.doubleValue else { continue }
+                let span = ((w["window_minutes"] as? NSNumber)?.doubleValue ?? (key == "primary" ? 300 : 10080)) * 60
+                var reset: Date?
+                if let at = (w["resets_at"] as? NSNumber)?.doubleValue { reset = Date(timeIntervalSince1970: at) }
+                else if let s = (w["resets_in_seconds"] as? NSNumber)?.doubleValue { reset = stamp.addingTimeInterval(s) }
+                if let r = reset, r < Date() { used = 0; reset = nil }   // la ventana ya se reinició
+                let label = span >= 6 * 86400 ? "Semana" : (abs(span - 18000) < 120 ? "Sesión (5 h)" : "Ventana de \(Int((span / 3600).rounded())) h")
+                rows.append(UsageRow(id: "gpt_" + key, label: label, percent: used, resetsAt: reset, window: span))
+            }
+            if !rows.isEmpty { return rows }
+        }
+        return nil
     }
 }
 
