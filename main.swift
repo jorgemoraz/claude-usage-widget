@@ -553,6 +553,13 @@ final class UsageModel: ObservableObject {
             DispatchQueue.main.async { self.onChange?() }
         }
     }
+    /// Escala libre que se ajusta arrastrando la esquina inferior derecha
+    @Published var zoom: CGFloat = CGFloat(UserDefaults.standard.object(forKey: "zoom") as? Double ?? 1) {
+        didSet {
+            UserDefaults.standard.set(Double(zoom), forKey: "zoom")
+            DispatchQueue.main.async { self.onChange?() }
+        }
+    }
     @Published var alwaysOnTop: Bool = UserDefaults.standard.object(forKey: "alwaysOnTop") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(alwaysOnTop, forKey: "alwaysOnTop")
@@ -1048,8 +1055,33 @@ struct WidgetActions {
     let quit: () -> Void
 }
 
+struct NaturalSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
+/// Asa de la esquina inferior derecha para cambiar el tamaño
+struct ResizeGrip: View {
+    var body: some View {
+        Canvas { ctx, size in
+            for i in 0..<3 {
+                let o = CGFloat(i) * 3.5
+                var p = Path()
+                p.move(to: CGPoint(x: size.width - 2, y: o + 2))
+                p.addLine(to: CGPoint(x: o + 2, y: size.height - 2))
+                ctx.stroke(p, with: .color(.white.opacity(0.35 - Double(i) * 0.08)),
+                           style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+            }
+        }
+        .frame(width: 11, height: 11)
+        .padding(5)
+        .allowsHitTesting(false)
+    }
+}
+
 struct WidgetView: View {
     @ObservedObject var model: UsageModel
+    @State private var natural: CGSize = .zero
     let actions: WidgetActions
 
     var worst: UsageRow? { model.rows.max { $0.percent < $1.percent } }
@@ -1060,9 +1092,18 @@ struct WidgetView: View {
             let mood = Mood.from(worst?.percent)
             let celebrating = model.celebrateUntil > ctx.date
             let shown = celebrating ? Mood.feliz : mood
-            let radius: CGFloat = model.layout == .mini ? 23 : 22
+            let z = model.zoom
+            let radius: CGFloat = (model.layout == .mini ? 23 : 22) * z
             let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
             content(ctx.date, mood: mood, celebrating: celebrating)
+                .fixedSize()
+                .background(GeometryReader { g in Color.clear.preference(key: NaturalSizeKey.self, value: g.size) })
+                .scaleEffect(z, anchor: .topLeading)
+                .frame(width: natural == .zero ? nil : natural.width * z,
+                       height: natural == .zero ? nil : natural.height * z,
+                       alignment: .topLeading)
+                .onPreferenceChange(NaturalSizeKey.self) { natural = $0 }
+                .overlay(alignment: .bottomTrailing) { ResizeGrip() }
                 .background(
                     ZStack {
                         GlassBackground(radius: radius)
@@ -1318,6 +1359,8 @@ struct WidgetView: View {
                 Button((model.layout == l ? "✓ " : "") + l.title) { model.layout = l }
             }
         }
+        Button("Tamaño original") { model.zoom = 1 }
+        Divider()
         Button("Actualizar ahora") { model.refresh() }
         Button(model.showGPT ? "✓ Mostrar ChatGPT" : "Mostrar ChatGPT") { model.showGPT.toggle() }
         Button(model.alwaysOnTop ? "✓ Siempre por encima" : "Siempre por encima") { model.alwaysOnTop.toggle() }
@@ -1365,8 +1408,17 @@ final class FloatingPanel: NSPanel {
 }
 
 final class DraggableHostingView<Content: View>: NSHostingView<Content> {
+    var cornerResize: ((NSEvent) -> Void)?
+
     override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
+        let p = convert(event.locationInWindow, from: nil)
+        let nearRight = p.x > bounds.width - 22
+        let nearBottom = isFlipped ? p.y > bounds.height - 22 : p.y < 22
+        if nearRight && nearBottom, let resize = cornerResize {
+            resize(event)
+        } else {
+            window?.performDrag(with: event)
+        }
     }
 }
 
@@ -1389,6 +1441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             quit: { NSApp.terminate(nil) }
         )
         hosting = DraggableHostingView(rootView: WidgetView(model: model, actions: actions))
+        hosting.cornerResize = { [weak self] e in self?.trackResize(e) }
 
         panel = FloatingPanel()
         panel.contentView = hosting
@@ -1467,6 +1520,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hosting.layoutSubtreeIfNeeded()
         let s = hosting.fittingSize
         return NSSize(width: max(s.width, 60), height: max(s.height, 40))
+    }
+
+    /// Arrastrar la esquina inferior derecha escala el widget, como una ventana
+    func trackResize(_ start: NSEvent) {
+        let p0 = NSEvent.mouseLocation
+        let z0 = model.zoom
+        let w0 = panel.frame.width, h0 = panel.frame.height
+        while let e = panel.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            let p = NSEvent.mouseLocation
+            let fx = (w0 + (p.x - p0.x)) / w0
+            let fy = (h0 + (p0.y - p.y)) / h0
+            let z = min(max(z0 * max(fx, fy), 0.6), 3)
+            if abs(z - model.zoom) > 0.005 {
+                model.zoom = z
+                hosting.layoutSubtreeIfNeeded()
+                resizeKeepingTopLeft()
+            }
+            if e.type == .leftMouseUp { break }
+        }
     }
 
     /// Al cambiar de tamaño mantiene fija la esquina superior izquierda
