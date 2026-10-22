@@ -244,7 +244,8 @@ enum Updater {
         posix_spawnattr_init(&attr)
         posix_spawnattr_setflags(&attr, Int16(0x0400)) // POSIX_SPAWN_SETSID
         defer { posix_spawnattr_destroy(&attr) }
-        var args: [UnsafeMutablePointer<CChar>?] = ["/bin/bash", "-c", cmd].map { strdup($0) }
+        let parts: [String] = ["/bin/bash", "-c", cmd]
+        var args: [UnsafeMutablePointer<CChar>?] = parts.map { strdup($0) }
         args.append(nil)
         defer { args.forEach { free($0) } }
         var pid: pid_t = 0
