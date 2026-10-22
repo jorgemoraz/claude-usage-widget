@@ -5,6 +5,7 @@
 import AppKit
 import SwiftUI
 import Security
+import WebKit
 
 // MARK: - Modelo de datos
 
@@ -17,7 +18,7 @@ struct UsageRow: Identifiable, Equatable {
 }
 
 enum UsageError: LocalizedError, Equatable {
-    case noCredentials, unauthorized, http(Int), badData, noOrg
+    case noCredentials, unauthorized, http(Int), badData, noOrg, needLogin
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +27,7 @@ enum UsageError: LocalizedError, Equatable {
         case .http(let code): return "El servidor respondió con un error \(code)."
         case .badData: return "Respuesta inesperada del servidor."
         case .noOrg: return "No encuentro tu organización en claude.ai."
+        case .needLogin: return "Inicia sesión en Claude: clic derecho › Iniciar sesión en claude.ai…"
         }
     }
 }
@@ -253,6 +255,142 @@ enum Updater {
     }
 }
 
+// MARK: - Sesión de claude.ai dentro de la app
+
+/// Navegador interno e invisible con su propia sesión de claude.ai. El usuario inicia sesión
+/// una vez en una ventanita y las consultas de uso se hacen desde esa misma sesión,
+/// como lo haría la web, sin copiar cookies ni tener Claude Code.
+final class WebSession: NSObject, WKNavigationDelegate {
+    static let shared = WebSession()
+    static let safariUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+
+    private var web: WKWebView?
+    private var ready = false
+    private var waiters: [() -> Void] = []
+    private var loginWindow: NSWindow?
+    private var loginWeb: WKWebView?
+    private var pollTimer: Timer?
+    var onLogin: (() -> Void)?
+
+    private func makeWeb() -> WKWebView {
+        let cfg = WKWebViewConfiguration()
+        cfg.websiteDataStore = .default()
+        let w = WKWebView(frame: NSRect(x: 0, y: 0, width: 480, height: 680), configuration: cfg)
+        w.customUserAgent = WebSession.safariUA
+        return w
+    }
+
+    private func whenReady(_ f: @escaping () -> Void) {
+        if ready { return f() }
+        waiters.append(f)
+        guard web == nil else { return }
+        let w = makeWeb()
+        w.navigationDelegate = self
+        web = w
+        w.load(URLRequest(url: URL(string: "https://claude.ai/")!))
+    }
+
+    private func flush() {
+        let w = waiters
+        waiters = []
+        w.forEach { $0() }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === web else { return }
+        ready = true
+        flush()
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(webView) }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(webView) }
+
+    private func failed(_ webView: WKWebView) {
+        guard webView === web else { return }
+        web = nil
+        ready = false
+        flush()
+    }
+
+    func fetchUsage(_ completion: @escaping (Result<[UsageRow], Error>) -> Void) {
+        DispatchQueue.main.async {
+            self.whenReady {
+                guard let w = self.web else { return completion(.failure(UsageError.http(0))) }
+                let js = """
+                const o = await fetch('/api/organizations', {credentials: 'include'});
+                if (o.status !== 200) return {status: o.status, body: ''};
+                const orgs = await o.json();
+                const org = orgs.find(x => (x.capabilities || []).includes('chat')) || orgs[0];
+                if (!org) return {status: 404, body: ''};
+                const r = await fetch('/api/organizations/' + org.uuid + '/usage', {credentials: 'include'});
+                return {status: r.status, body: await r.text()};
+                """
+                w.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { result in
+                    switch result {
+                    case .failure(let e):
+                        completion(.failure(e))
+                    case .success(let v):
+                        guard let d = v as? [String: Any], let status = (d["status"] as? NSNumber)?.intValue else {
+                            return completion(.failure(UsageError.badData))
+                        }
+                        if status == 401 || status == 403 { return completion(.failure(UsageError.needLogin)) }
+                        guard status == 200, let body = (d["body"] as? String)?.data(using: .utf8) else {
+                            return completion(.failure(UsageError.http(status)))
+                        }
+                        completion(Result { try UsageAPI.parse(body) })
+                    }
+                }
+            }
+        }
+    }
+
+    private func hasSession(_ done: @escaping (Bool) -> Void) {
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+            done(cookies.contains { $0.name == "sessionKey" && $0.domain.hasSuffix("claude.ai") })
+        }
+    }
+
+    /// Ventana para iniciar sesión en claude.ai. Se cierra sola en cuanto hay sesión.
+    func showLogin() {
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            if let w = self.loginWindow, w.isVisible { return w.makeKeyAndOrderFront(nil) }
+            let web = self.makeWeb()
+            web.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
+            let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 680),
+                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            win.title = "Inicia sesión en Claude · Uso de Claude"
+            win.contentView = web
+            win.isReleasedWhenClosed = false
+            win.level = .floating
+            win.center()
+            self.loginWindow = win
+            self.loginWeb = web
+            win.makeKeyAndOrderFront(nil)
+            self.pollTimer?.invalidate()
+            self.pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] t in
+                guard let self = self else { return t.invalidate() }
+                guard self.loginWindow?.isVisible == true else {
+                    t.invalidate(); self.loginWeb = nil; return
+                }
+                self.hasSession { ok in
+                    DispatchQueue.main.async {
+                        guard ok, let path = self.loginWeb?.url?.path,
+                              !path.hasPrefix("/login"), !path.contains("magic-link") else { return }
+                        t.invalidate()
+                        self.loginWindow?.close()
+                        self.loginWindow = nil
+                        self.loginWeb = nil
+                        self.web = nil
+                        self.ready = false
+                        self.onLogin?()
+                    }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - ChatGPT (límites de Codex)
 
 /// Lee los límites de uso del plan de ChatGPT a través de la sesión de Codex del Mac.
@@ -415,18 +553,26 @@ final class UsageModel: ObservableObject {
         guard !loading else { return }
         loading = true
         DispatchQueue.global(qos: .utility).async {
-            if let key = KeychainStore.read() {
-                UsageAPI.viaWeb(key: key) { r in
-                    if case .success = r { return self.finish(r, "claude.ai") }
-                    UsageAPI.viaClaudeCode { r2 in
-                        if case .success = r2 { self.finish(r2, "Claude Code") } else { self.finish(r, "claude.ai") }
+            // 1) Sesión de Claude Code, si la hay en este Mac
+            UsageAPI.viaClaudeCode { r in
+                if case .success = r { return self.finish(r, "Claude Code") }
+                // 2) Sesión de claude.ai iniciada dentro de la propia app
+                WebSession.shared.fetchUsage { r2 in
+                    if case .success = r2 { return self.finish(r2, "claude.ai") }
+                    // 3) sessionKey pegada a mano (opción avanzada)
+                    if let key = KeychainStore.read() {
+                        UsageAPI.viaWeb(key: key) { r3 in
+                            if case .success = r3 { self.finish(r3, "claude.ai") } else { self.finish(r2, "claude.ai") }
+                        }
+                    } else {
+                        self.finish(r2, "claude.ai")
                     }
                 }
-            } else {
-                UsageAPI.viaClaudeCode { self.finish($0, "Claude Code") }
             }
         }
     }
+
+    private var askedLogin = false
 
     private func finish(_ r: Result<[UsageRow], Error>, _ src: String) {
         DispatchQueue.main.async {
@@ -445,6 +591,11 @@ final class UsageModel: ObservableObject {
                 self.source = src
             case .failure(let e):
                 self.error = e.localizedDescription
+                // Sin datos y sin sesión: abre la ventana de inicio de sesión (una vez por arranque)
+                if self.rows.isEmpty, (e as? UsageError) == .needLogin, !self.askedLogin {
+                    self.askedLogin = true
+                    WebSession.shared.showLogin()
+                }
             }
             self.onChange?()
         }
@@ -1116,6 +1267,7 @@ struct WidgetView: View {
             NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!)
         }
         Divider()
+        Button("Iniciar sesión en claude.ai…") { WebSession.shared.showLogin() }
         Button("Configurar sessionKey de claude.ai…") { actions.setKey() }
         Button("Borrar sessionKey") { actions.clearKey() }
         if !model.source.isEmpty {
@@ -1194,6 +1346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         model.onChange = { [weak self] in DispatchQueue.main.async { self?.resizeKeepingTopLeft() } }
         model.onLevelChange = { [weak self] in self?.applyLevel() }
+        WebSession.shared.onLogin = { [weak self] in self?.model.refresh() }
         model.start()
     }
 
