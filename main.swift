@@ -1118,7 +1118,6 @@ struct NaturalSizeKey: PreferenceKey {
 
 struct WidgetView: View {
     @ObservedObject var model: UsageModel
-    @State private var natural: CGSize = .zero
     let actions: WidgetActions
 
     var worst: UsageRow? { model.rows.max { $0.percent < $1.percent } }
@@ -1134,12 +1133,6 @@ struct WidgetView: View {
             let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
             content(ctx.date, mood: mood, celebrating: celebrating)
                 .fixedSize()
-                .background(GeometryReader { g in Color.clear.preference(key: NaturalSizeKey.self, value: g.size) })
-                .scaleEffect(z, anchor: .topLeading)
-                .frame(width: natural == .zero ? nil : natural.width * z,
-                       height: natural == .zero ? nil : natural.height * z,
-                       alignment: .topLeading)
-                .onPreferenceChange(NaturalSizeKey.self) { natural = $0 }
                 .background(
                     ZStack {
                         GlassBackground(radius: radius)
@@ -1161,8 +1154,6 @@ struct WidgetView: View {
                         .padding(controlsVertical ? 8 : 7)
                 }
                 .padding(1)
-                .background(GeometryReader { g in Color.clear.preference(key: FinalSizeKey.self, value: g.size) })
-                .onPreferenceChange(FinalSizeKey.self) { model.onSize?($0) }
                 .contextMenu { menu }
         }
     }
@@ -1262,13 +1253,14 @@ struct WidgetView: View {
 
     @ViewBuilder
     func content(_ now: Date, mood: Mood, celebrating: Bool) -> some View {
+        let z = model.zoom
         switch model.layout {
         case .mini:
-            HStack(spacing: 6) {
-                mascot(34, mood, celebrating)
+            HStack(spacing: 6 * z) {
+                mascot(34 * z, mood, celebrating)
                 if let s = session {
                     Text("\(Int(s.percent.rounded()))%")
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .font(.system(size: 17 * z, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundColor(usageColor(s.percent))
                         .contentTransition(.numericText())
@@ -1276,47 +1268,35 @@ struct WidgetView: View {
                 }
                 if model.showGPT, let g = gptHeadline {
                     Text("· GPT \(Int(g.percent.rounded()))%")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(size: 11 * z, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundColor(.white.opacity(0.6))
                 }
             }
-            .padding(.vertical, 6)
-            .padding(.leading, 6)
-            .padding(.trailing, 72)
+            .padding(.vertical, 6 * z)
+            .padding(.leading, 6 * z)
+            .padding(.trailing, 12 * z + 60)
 
         case .compacto:
-            HStack(spacing: 10) {
-                mascot(46, mood, celebrating)
-                VStack(alignment: .leading, spacing: 2) {
-                    phraseText(mood, celebrating, now, k: 0.9)
-                    bigPercent(k: 0.8, label: "% sesión")
+            HStack(spacing: 10 * z) {
+                mascot(46 * z, mood, celebrating)
+                VStack(alignment: .leading, spacing: 2 * z) {
+                    phraseText(mood, celebrating, now, k: 0.9 * z)
+                    bigPercent(k: 0.8 * z, label: "% sesión")
                     if let w = model.rows.first(where: { $0.id == "seven_day" }) {
-                        HStack(spacing: 5) {
-                            Text("Semana").font(.system(size: 9)).foregroundColor(.white.opacity(0.5))
-                            UsageBar(percent: w.percent, pace: nil, height: 4)
-                            Text("\(Int(w.percent.rounded()))%")
-                                .font(.system(size: 9, weight: .semibold)).monospacedDigit()
-                                .foregroundColor(usageColor(w.percent))
-                        }
+                        miniBar("Semana", w.percent, z)
                     }
                     if model.showGPT, let g = gptHeadline {
-                        HStack(spacing: 5) {
-                            Text("ChatGPT").font(.system(size: 9)).foregroundColor(.white.opacity(0.5))
-                            UsageBar(percent: g.percent, pace: nil, height: 4)
-                            Text("\(Int(g.percent.rounded()))%")
-                                .font(.system(size: 9, weight: .semibold)).monospacedDigit()
-                                .foregroundColor(usageColor(g.percent))
-                        }
+                        miniBar("ChatGPT", g.percent, z)
                     }
                 }
             }
-            .padding(10)
+            .padding(10 * z)
             .padding(.trailing, 28)
-            .frame(width: 248)
+            .frame(width: 220 * z + 28)
 
         case .normal, .grande:
-            let k: CGFloat = model.layout == .grande ? 1.35 : 1
+            let k: CGFloat = (model.layout == .grande ? 1.35 : 1) * z
             VStack(alignment: .leading, spacing: 12 * k) {
                 HStack(alignment: .center, spacing: 12 * k) {
                     mascot(64 * k, mood, celebrating)
@@ -1344,59 +1324,69 @@ struct WidgetView: View {
             .frame(width: 290 * k)
 
         case .horizontal:
-            HStack(alignment: .center, spacing: 16) {
-                mascot(54, mood, celebrating)
-                VStack(alignment: .leading, spacing: 2) {
-                    phraseText(mood, celebrating, now, k: 1)
-                    bigPercent(k: 0.9)
-                    comeback(mood, celebrating, now, k: 1)
+            HStack(alignment: .center, spacing: 16 * z) {
+                mascot(54 * z, mood, celebrating)
+                VStack(alignment: .leading, spacing: 2 * z) {
+                    phraseText(mood, celebrating, now, k: z)
+                    bigPercent(k: 0.9 * z)
+                    comeback(mood, celebrating, now, k: z)
                 }
-                .frame(width: 150, alignment: .leading)
+                .frame(width: 150 * z, alignment: .leading)
                 if model.rows.isEmpty {
-                    rows(now, k: 1).frame(width: 220)
+                    rows(now, k: z).frame(width: 220 * z)
                 } else {
                     ForEach(model.rows) { r in
-                        Divider().frame(height: 44).overlay(Color.white.opacity(0.1))
-                        RowView(row: r, now: now, k: 1).frame(width: 190)
+                        Divider().frame(height: 44 * z).overlay(Color.white.opacity(0.1))
+                        RowView(row: r, now: now, k: z).frame(width: 190 * z)
                     }
                 }
                 if model.showGPT {
                     ForEach(model.gptRows) { r in
-                        Divider().frame(height: 44).overlay(Color.white.opacity(0.1))
+                        Divider().frame(height: 44 * z).overlay(Color.white.opacity(0.1))
                         RowView(row: UsageRow(id: r.id, label: "ChatGPT · " + r.label, percent: r.percent,
-                                              resetsAt: r.resetsAt, window: r.window), now: now, k: 1)
-                            .frame(width: 190)
+                                              resetsAt: r.resetsAt, window: r.window), now: now, k: z)
+                            .frame(width: 190 * z)
                     }
                 }
             }
-            .padding(.leading, 14)
-            .padding(.trailing, 40)
-            .padding(.vertical, 10)
+            .padding(.leading, 14 * z)
+            .padding(.trailing, 14 * z + 26)
+            .padding(.vertical, 10 * z)
 
         case .vertical:
-            VStack(alignment: .center, spacing: 10) {
-                mascot(68, mood, celebrating)
-                phraseText(mood, celebrating, now, k: 0.95, center: true)
+            VStack(alignment: .center, spacing: 10 * z) {
+                mascot(68 * z, mood, celebrating)
+                phraseText(mood, celebrating, now, k: 0.95 * z, center: true)
                 if let s = session {
                     VStack(spacing: 0) {
                         Text("\(Int(s.percent.rounded()))%")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                            .font(.system(size: 30 * z, weight: .bold, design: .rounded))
                             .monospacedDigit()
                             .foregroundColor(usageColor(s.percent))
                             .contentTransition(.numericText())
                             .animation(.easeOut(duration: 0.6), value: s.percent)
-                        Text("de la sesión").font(.system(size: 10)).foregroundColor(.white.opacity(0.55))
+                        Text("de la sesión").font(.system(size: 10 * z)).foregroundColor(.white.opacity(0.55))
                     }
                 }
-                comeback(mood, celebrating, now, k: 1)
-                VStack(alignment: .leading, spacing: 10) {
-                    rows(now, k: 0.9, showReset: false)
-                    gptSection(now, k: 0.9, showReset: false)
+                comeback(mood, celebrating, now, k: z)
+                VStack(alignment: .leading, spacing: 10 * z) {
+                    rows(now, k: 0.9 * z, showReset: false)
+                    gptSection(now, k: 0.9 * z, showReset: false)
                 }
-                Text(statusText(now)).font(.system(size: 9)).foregroundColor(.white.opacity(0.4))
+                Text(statusText(now)).font(.system(size: 9 * z)).foregroundColor(.white.opacity(0.4))
             }
-            .padding(14)
-            .frame(width: 160)
+            .padding(14 * z)
+            .frame(width: 160 * z)
+        }
+    }
+
+    func miniBar(_ label: String, _ percent: Double, _ z: CGFloat) -> some View {
+        HStack(spacing: 5 * z) {
+            Text(label).font(.system(size: 9 * z)).foregroundColor(.white.opacity(0.5))
+            UsageBar(percent: percent, pace: nil, height: 4 * z)
+            Text("\(Int(percent.rounded()))%")
+                .font(.system(size: 9 * z, weight: .semibold)).monospacedDigit()
+                .foregroundColor(usageColor(percent))
         }
     }
 
@@ -1503,8 +1493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
 
-        model.onChange = { [weak self] in DispatchQueue.main.async { self?.updateStatusItem() } }
-        model.onSize = { [weak self] size in DispatchQueue.main.async { self?.setSizeKeepingTopLeft(size) } }
+        model.onChange = { [weak self] in self?.contentChanged() }
         model.onLevelChange = { [weak self] in self?.applyLevel() }
         WebSession.shared.onLogin = { [weak self] in self?.model.refresh() }
         if ProcessInfo.processInfo.environment["WIDGET_SELFTEST"] != nil { return selfTest() }
@@ -1570,6 +1559,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hosting.layoutSubtreeIfNeeded()
         let s = hosting.fittingSize
         return NSSize(width: max(s.width, 60), height: max(s.height, 40))
+    }
+
+    /// Tras cualquier cambio, espera a que SwiftUI redibuje y ajusta la ventana a su tamaño real
+    func contentChanged() {
+        updateStatusItem()
+        for delay in [0.0, 0.05, 0.25] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self else { return }
+                self.hosting.layoutSubtreeIfNeeded()
+                self.setSizeKeepingTopLeft(self.hosting.fittingSize)
+            }
+        }
     }
 
     /// Ajusta la ventana al tamaño exacto del widget, con la esquina superior izquierda fija
