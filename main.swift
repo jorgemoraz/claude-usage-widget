@@ -560,6 +560,12 @@ final class UsageModel: ObservableObject {
             DispatchQueue.main.async { self.onChange?() }
         }
     }
+    static let zoomSteps: [CGFloat] = [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2]
+    var canZoomIn: Bool { zoom < (UsageModel.zoomSteps.last ?? 2) - 0.001 }
+    var canZoomOut: Bool { zoom > (UsageModel.zoomSteps.first ?? 1) + 0.001 }
+    func zoomIn() { if let n = UsageModel.zoomSteps.first(where: { $0 > zoom + 0.001 }) { zoom = n } }
+    func zoomOut() { if let n = UsageModel.zoomSteps.last(where: { $0 < zoom - 0.001 }) { zoom = n } }
+    var onSize: ((CGSize) -> Void)?
     @Published var alwaysOnTop: Bool = UserDefaults.standard.object(forKey: "alwaysOnTop") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(alwaysOnTop, forKey: "alwaysOnTop")
@@ -1053,30 +1059,61 @@ struct WidgetActions {
     let setKey: () -> Void
     let clearKey: () -> Void
     let quit: () -> Void
+    let minimize: () -> Void
+}
+
+/// Zonas clicables (botones) en coordenadas de la ventana; el resto del widget sirve para arrastrar.
+enum HitZones { static var controls: CGRect = .zero }
+
+struct ControlsRectKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+struct FinalSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
+/// Botoncitos: más pequeño, más grande y minimizar a la barra de menús
+struct Controls: View {
+    @ObservedObject var model: UsageModel
+    let actions: WidgetActions
+    let vertical: Bool
+
+    func button(_ symbol: String, _ help: String, enabled: Bool = true, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 8, weight: .bold))
+                .frame(width: 17, height: 17)
+                .background(Circle().fill(Color.white.opacity(0.14)))
+                .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 0.5))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(.white.opacity(enabled ? 0.9 : 0.3))
+        .disabled(!enabled)
+        .help(help)
+    }
+
+    @ViewBuilder var buttons: some View {
+        button("minus", "Más pequeño", enabled: model.canZoomOut) { model.zoomOut() }
+        button("plus", "Más grande", enabled: model.canZoomIn) { model.zoomIn() }
+        button("menubar.arrow.up.rectangle", "Minimizar en la barra de menús") { actions.minimize() }
+    }
+
+    var body: some View {
+        Group {
+            if vertical { VStack(spacing: 4) { buttons } } else { HStack(spacing: 4) { buttons } }
+        }
+        .background(GeometryReader { g in Color.clear.preference(key: ControlsRectKey.self, value: g.frame(in: .global)) })
+        .onPreferenceChange(ControlsRectKey.self) { HitZones.controls = $0 }
+    }
 }
 
 struct NaturalSizeKey: PreferenceKey {
     static var defaultValue: CGSize = .zero
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
-}
-
-/// Asa de la esquina inferior derecha para cambiar el tamaño
-struct ResizeGrip: View {
-    var body: some View {
-        Canvas { ctx, size in
-            for i in 0..<3 {
-                let o = CGFloat(i) * 3.5
-                var p = Path()
-                p.move(to: CGPoint(x: size.width - 2, y: o + 2))
-                p.addLine(to: CGPoint(x: o + 2, y: size.height - 2))
-                ctx.stroke(p, with: .color(.white.opacity(0.35 - Double(i) * 0.08)),
-                           style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
-            }
-        }
-        .frame(width: 11, height: 11)
-        .padding(5)
-        .allowsHitTesting(false)
-    }
 }
 
 struct WidgetView: View {
@@ -1103,7 +1140,6 @@ struct WidgetView: View {
                        height: natural == .zero ? nil : natural.height * z,
                        alignment: .topLeading)
                 .onPreferenceChange(NaturalSizeKey.self) { natural = $0 }
-                .overlay(alignment: .bottomTrailing) { ResizeGrip() }
                 .background(
                     ZStack {
                         GlassBackground(radius: radius)
@@ -1120,10 +1156,19 @@ struct WidgetView: View {
                     lineWidth: 1))
                 // Filo exterior oscuro finísimo: define el borde sobre fondos blancos
                 .overlay(shape.stroke(Color.black.opacity(0.18), lineWidth: 0.5))
+                .overlay(alignment: controlsAlignment) {
+                    Controls(model: model, actions: actions, vertical: controlsVertical)
+                        .padding(controlsVertical ? 8 : 7)
+                }
                 .padding(1)
+                .background(GeometryReader { g in Color.clear.preference(key: FinalSizeKey.self, value: g.size) })
+                .onPreferenceChange(FinalSizeKey.self) { model.onSize?($0) }
                 .contextMenu { menu }
         }
     }
+
+    var controlsVertical: Bool { [.compacto, .horizontal, .vertical].contains(model.layout) }
+    var controlsAlignment: Alignment { [.mini, .compacto, .horizontal].contains(model.layout) ? .trailing : .topTrailing }
 
     // MARK: Piezas
 
@@ -1238,7 +1283,7 @@ struct WidgetView: View {
             }
             .padding(.vertical, 6)
             .padding(.leading, 6)
-            .padding(.trailing, 12)
+            .padding(.trailing, 72)
 
         case .compacto:
             HStack(spacing: 10) {
@@ -1267,7 +1312,8 @@ struct WidgetView: View {
                 }
             }
             .padding(10)
-            .frame(width: 220)
+            .padding(.trailing, 28)
+            .frame(width: 248)
 
         case .normal, .grande:
             let k: CGFloat = model.layout == .grande ? 1.35 : 1
@@ -1281,9 +1327,6 @@ struct WidgetView: View {
                                 .tracking(0.8)
                                 .foregroundColor(.white.opacity(0.45))
                             Spacer()
-                            Text(statusText(now))
-                                .font(.system(size: 9 * k))
-                                .foregroundColor(.white.opacity(0.4))
                         }
                         phraseText(mood, celebrating, now, k: k)
                         bigPercent(k: k)
@@ -1292,6 +1335,10 @@ struct WidgetView: View {
                 }
                 rows(now, k: k)
                 gptSection(now, k: k)
+                Text(statusText(now))
+                    .font(.system(size: 9 * k))
+                    .foregroundColor(.white.opacity(0.4))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(14 * k)
             .frame(width: 290 * k)
@@ -1322,7 +1369,8 @@ struct WidgetView: View {
                     }
                 }
             }
-            .padding(.horizontal, 14)
+            .padding(.leading, 14)
+            .padding(.trailing, 40)
             .padding(.vertical, 10)
 
         case .vertical:
@@ -1360,6 +1408,7 @@ struct WidgetView: View {
             }
         }
         Button("Tamaño original") { model.zoom = 1 }
+        Button("Minimizar en la barra de menús") { actions.minimize() }
         Divider()
         Button("Actualizar ahora") { model.refresh() }
         Button(model.showGPT ? "✓ Mostrar ChatGPT" : "Mostrar ChatGPT") { model.showGPT.toggle() }
@@ -1408,14 +1457,13 @@ final class FloatingPanel: NSPanel {
 }
 
 final class DraggableHostingView<Content: View>: NSHostingView<Content> {
-    var cornerResize: ((NSEvent) -> Void)?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        let nearRight = p.x > bounds.width - 22
-        let nearBottom = isFlipped ? p.y > bounds.height - 22 : p.y < 22
-        if nearRight && nearBottom, let resize = cornerResize {
-            resize(event)
+        let point = CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)
+        if HitZones.controls.insetBy(dx: -3, dy: -3).contains(point) {
+            super.mouseDown(with: event)
         } else {
             window?.performDrag(with: event)
         }
@@ -1438,24 +1486,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 UserDefaults.standard.removeObject(forKey: "orgId")
                 self?.model.refresh()
             },
-            quit: { NSApp.terminate(nil) }
+            quit: { NSApp.terminate(nil) },
+            minimize: { [weak self] in DispatchQueue.main.async { self?.minimize() } }
         )
         hosting = DraggableHostingView(rootView: WidgetView(model: model, actions: actions))
-        hosting.cornerResize = { [weak self] e in self?.trackResize(e) }
 
         panel = FloatingPanel()
         panel.contentView = hosting
         panel.setContentSize(widgetSize())
         applyLevel()
         restorePosition()
-        panel.orderFrontRegardless()
+        if UserDefaults.standard.bool(forKey: "minimized") { minimize() } else { panel.orderFrontRegardless() }
 
         NotificationCenter.default.addObserver(self, selector: #selector(panelMoved),
                                                name: NSWindow.didMoveNotification, object: panel)
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
 
-        model.onChange = { [weak self] in DispatchQueue.main.async { self?.resizeKeepingTopLeft() } }
+        model.onChange = { [weak self] in DispatchQueue.main.async { self?.updateStatusItem() } }
+        model.onSize = { [weak self] size in DispatchQueue.main.async { self?.setSizeKeepingTopLeft(size) } }
         model.onLevelChange = { [weak self] in self?.applyLevel() }
         WebSession.shared.onLogin = { [weak self] in self?.model.refresh() }
         model.start()
@@ -1522,24 +1571,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return NSSize(width: max(s.width, 60), height: max(s.height, 40))
     }
 
-    /// Arrastrar la esquina inferior derecha escala el widget, como una ventana
-    func trackResize(_ start: NSEvent) {
-        let p0 = NSEvent.mouseLocation
-        let z0 = model.zoom
-        let w0 = panel.frame.width, h0 = panel.frame.height
-        while let e = panel.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
-            let p = NSEvent.mouseLocation
-            let fx = (w0 + (p.x - p0.x)) / w0
-            let fy = (h0 + (p0.y - p.y)) / h0
-            let z = min(max(z0 * max(fx, fy), 0.6), 3)
-            if abs(z - model.zoom) > 0.005 {
-                model.zoom = z
-                hosting.layoutSubtreeIfNeeded()
-                resizeKeepingTopLeft()
-            }
-            if e.type == .leftMouseUp { break }
-        }
+    /// Ajusta la ventana al tamaño exacto del widget, con la esquina superior izquierda fija
+    func setSizeKeepingTopLeft(_ size: CGSize) {
+        guard size.width > 20, size.height > 20 else { return }
+        var f = panel.frame
+        if abs(f.width - size.width) < 0.5 && abs(f.height - size.height) < 0.5 { return }
+        let top = f.maxY
+        f.size = size
+        f.origin.y = top - size.height
+        movingProgrammatically = true
+        panel.setFrame(f, display: true)
+        panel.invalidateShadow()
+        movingProgrammatically = false
     }
+
+    // MARK: Barra de menús
+
+    var statusItem: NSStatusItem?
+
+    func minimize() {
+        panel.orderOut(nil)
+        UserDefaults.standard.set(true, forKey: "minimized")
+        if statusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            let menu = NSMenu()
+            for (title, sel) in [("Mostrar widget", #selector(restoreAction)), ("Actualizar ahora", #selector(refreshAction))] {
+                let i = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+                i.target = self
+                menu.addItem(i)
+            }
+            menu.addItem(.separator())
+            let q = NSMenuItem(title: "Salir", action: #selector(quitAction), keyEquivalent: "")
+            q.target = self
+            menu.addItem(q)
+            item.menu = menu
+            statusItem = item
+        }
+        updateStatusItem()
+    }
+
+    @objc func restoreAction() {
+        if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
+        statusItem = nil
+        UserDefaults.standard.set(false, forKey: "minimized")
+        panel.orderFrontRegardless()
+    }
+
+    @objc func refreshAction() { model.refresh() }
+    @objc func quitAction() { NSApp.terminate(nil) }
+
+    func updateStatusItem() {
+        guard let button = statusItem?.button else { return }
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        let title = NSMutableAttributedString()
+        func icon(_ img: NSImage) {
+            let a = NSTextAttachment()
+            a.image = img
+            a.bounds = CGRect(x: 0, y: -3, width: 14, height: 14)
+            title.append(NSAttributedString(attachment: a))
+        }
+        func text(_ t: String) {
+            title.append(NSAttributedString(string: t, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
+        }
+        let session = model.rows.first { $0.id == "five_hour" } ?? model.rows.first
+        icon(AppDelegate.mascotIcon)
+        text(" " + (session.map { "\(Int($0.percent.rounded()))%" } ?? "–"))
+        if model.showGPT, let g = model.gptRows.max(by: { $0.percent < $1.percent }) {
+            text("   ")
+            icon(AppDelegate.chatIcon)
+            text(" \(Int(g.percent.rounded()))%")
+        }
+        button.image = nil
+        button.attributedTitle = title
+    }
+
+    /// Carita de la mascota en miniatura (dibujo propio)
+    static let mascotIcon: NSImage = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { r in
+        NSColor(red: 0.87, green: 0.50, blue: 0.37, alpha: 1).setFill()
+        NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 1.5), xRadius: 4, yRadius: 4).fill()
+        NSColor(red: 0.16, green: 0.10, blue: 0.09, alpha: 1).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 4, y: 6, width: 2, height: 2.6)).fill()
+        NSBezierPath(ovalIn: NSRect(x: 8, y: 6, width: 2, height: 2.6)).fill()
+        return true
+    }
+
+    /// Bocadillo genérico para ChatGPT
+    static let chatIcon: NSImage = {
+        let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor(red: 0.30, green: 0.78, blue: 0.62, alpha: 1)]))
+        return NSImage(systemSymbolName: "bubble.left.fill", accessibilityDescription: "ChatGPT")?
+            .withSymbolConfiguration(cfg) ?? NSImage()
+    }()
 
     /// Al cambiar de tamaño mantiene fija la esquina superior izquierda
     func resizeKeepingTopLeft() {
