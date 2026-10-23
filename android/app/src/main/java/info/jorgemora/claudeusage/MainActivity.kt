@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private val scope = MainScope()
     private lateinit var status: TextView
     private lateinit var mascot: ImageView
+    private lateinit var updateButton: Button
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
 
@@ -63,9 +64,8 @@ class MainActivity : Activity() {
         status = text("", 15f)
         root.addView(status)
         root.addView(text("Para añadir el widget: mantén pulsado el escritorio › Widgets › Uso de Claude. Tócalo para actualizar; toca la mascota para abrir esta pantalla.", 13f, 0xFF8F8786.toInt()))
-        root.addView(button("Descargar la última versión") {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)))
-        })
+        updateButton = button("Buscar versión nueva") { update() }
+        root.addView(updateButton)
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(0xFF1C1817.toInt())
@@ -79,7 +79,19 @@ class MainActivity : Activity() {
         super.onResume()
         show()
         refresh()
+        // Si hay versión nueva y ya tiene permiso, la instala sola (Android pide solo la confirmación final)
+        scope.launch {
+            AppUpdater.check(this@MainActivity)
+            show()
+            val allowed = android.os.Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()
+            if (AppUpdater.hasUpdate(this@MainActivity) && allowed && !autoTried) {
+                autoTried = true
+                update()
+            }
+        }
     }
+
+    private var autoTried = false
 
     override fun onDestroy() {
         scope.cancel()
@@ -98,7 +110,32 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun update() {
+        if (!AppUpdater.ensurePermission(this)) {
+            updateButton.text = "Activa «Permitir de esta fuente» y vuelve"
+            return
+        }
+        updateButton.text = "Comprobando…"
+        scope.launch {
+            val latest = AppUpdater.check(this@MainActivity)
+            if (latest == null || latest <= AppUpdater.current(this@MainActivity)) {
+                updateButton.text = "Ya tienes la última versión (${AppUpdater.current(this@MainActivity)})"
+                return@launch
+            }
+            updateButton.text = "Descargando versión $latest…"
+            val apk = AppUpdater.download(this@MainActivity)
+            if (apk == null) {
+                updateButton.text = "No se pudo descargar. Toca para reintentar"
+                return@launch
+            }
+            updateButton.text = "Instalando versión $latest…"
+            AppUpdater.install(this@MainActivity, apk)
+        }
+    }
+
     private fun show() {
+        updateButton.text = if (AppUpdater.hasUpdate(this))
+            "Instalar versión nueva (${AppUpdater.latestKnown(this)})" else "Buscar versión nueva"
         val claude = Store.rows(this, "claude")
         val gpt = Store.rows(this, "gpt")
         mascot.setImageResource(Mood.from(claude.maxOfOrNull { it.percent }).drawable)

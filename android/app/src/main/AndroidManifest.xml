@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
         android:label="Uso de Claude"
         android:icon="@drawable/mascot_feliz"
@@ -18,5 +19,12 @@
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/usage_widget_info" />
         </receiver>
+        <receiver android:name=".RowWidget" android:exported="true" android:label="Uso de Claude · una fila">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/row_widget_info" />
+        </receiver>
+        <receiver android:name=".InstallReceiver" android:exported="false" />
     </application>
 </manifest>

@@ -1,3 +1,4 @@
 <resources>
     <string name="widget_desc">Uso de Claude y ChatGPT con una mascota que cambia de humor</string>
+    <string name="row_desc">Una sola fila: semana y 5 horas de Claude y ChatGPT</string>
 </resources>

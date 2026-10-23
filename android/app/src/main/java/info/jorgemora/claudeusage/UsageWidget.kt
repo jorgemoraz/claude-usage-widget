@@ -35,6 +35,7 @@ class UsageWidget : AppWidgetProvider() {
         const val ACTION_REFRESH = "info.jorgemora.claudeusage.REFRESH"
 
         fun updateAll(c: Context, refreshing: Boolean = false) {
+            RowWidget.updateAll(c, refreshing)
             val m = AppWidgetManager.getInstance(c)
             render(c, m, m.getAppWidgetIds(ComponentName(c, UsageWidget::class.java)), refreshing)
         }
@@ -88,6 +89,7 @@ class UsageWidget : AppWidgetProvider() {
             val at = maxOf(Store.updated(c, "claude"), Store.updated(c, "gpt"))
             v.setTextViewText(R.id.footer, when {
                 refreshing -> "Actualizando…"
+                AppUpdater.hasUpdate(c) -> "Versión nueva disponible · abre la app"
                 at > 0 -> "Actualizado ${hourText(at)} · toca para actualizar"
                 else -> "Toca para actualizar"
             })
