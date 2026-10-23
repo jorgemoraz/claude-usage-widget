@@ -6,6 +6,7 @@ import AppKit
 import SwiftUI
 import Security
 import WebKit
+import Carbon
 
 // MARK: - Modelo de datos
 
@@ -1399,6 +1400,7 @@ struct WidgetView: View {
         }
         Button("Tamaño original") { model.zoom = 1 }
         Button("Minimizar en la barra de menús") { actions.minimize() }
+        Button("Mostrar desde cualquier sitio: ⌃⌥⌘U") {}.disabled(true)
         Divider()
         Button("Actualizar ahora") { model.refresh() }
         Button(model.showGPT ? "✓ Mostrar ChatGPT" : "Mostrar ChatGPT") { model.showGPT.toggle() }
@@ -1496,6 +1498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.onChange = { [weak self] in self?.contentChanged() }
         model.onLevelChange = { [weak self] in self?.applyLevel() }
         WebSession.shared.onLogin = { [weak self] in self?.model.refresh() }
+        registerHotKey()
         if ProcessInfo.processInfo.environment["WIDGET_SELFTEST"] != nil { return selfTest() }
         model.start()
     }
@@ -1598,6 +1601,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) { report("tras -1") ; exit(0) }
     }
 
+    // MARK: Atajo de teclado global ⌃⌥⌘U
+
+    var hotKeyRef: EventHotKeyRef?
+
+    func registerHotKey() {
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, userData in
+            guard let userData = userData else { return noErr }
+            let me = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
+            DispatchQueue.main.async { me.showFromHotKey() }
+            return noErr
+        }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), nil)
+        let id = EventHotKeyID(signature: OSType(0x434C5544), id: 1)
+        RegisterEventHotKey(UInt32(kVK_ANSI_U), UInt32(cmdKey | optionKey | controlKey), id,
+                            GetApplicationEventTarget(), 0, &hotKeyRef)
+    }
+
+    /// Trae el widget a la vista: lo saca de la barra de menús y lo recoloca si quedó fuera de pantalla
+    func showFromHotKey() {
+        if statusItem != nil { restoreAction() }
+        if !isOnScreen(panel.frame) { placeDefault() }
+        panel.orderFrontRegardless()
+        // Pequeño destello para encontrarlo
+        panel.alphaValue = 0.3
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.35
+            panel.animator().alphaValue = 1
+        }
+    }
+
     // MARK: Barra de menús
 
     var statusItem: NSStatusItem?
@@ -1608,7 +1641,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             let menu = NSMenu()
-            for (title, sel) in [("Mostrar widget", #selector(restoreAction)), ("Actualizar ahora", #selector(refreshAction))] {
+            for (title, sel) in [("Mostrar widget  ⌃⌥⌘U", #selector(restoreAction)), ("Actualizar ahora", #selector(refreshAction))] {
                 let i = NSMenuItem(title: title, action: sel, keyEquivalent: "")
                 i.target = self
                 menu.addItem(i)

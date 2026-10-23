@@ -90,6 +90,7 @@ NEW_PLIST="$(cat <<EOF
   <key>ProgramArguments</key>
   <array><string>${DEST}/Contents/MacOS/${BIN}</string></array>
   <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>AbandonProcessGroup</key><true/>
   <key>ProcessType</key><string>Interactive</string>
 </dict>
