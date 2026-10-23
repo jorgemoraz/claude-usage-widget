@@ -16,7 +16,7 @@
             <TextView android:id="@+id/c_5h" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textSize="15sp" android:textStyle="bold" android:textColor="#FFFFFFFF" />
         </LinearLayout>
     </LinearLayout>
-    <View android:layout_width="1dp" android:layout_height="28dp" android:background="#26FFFFFF" />
+    <FrameLayout android:layout_width="1dp" android:layout_height="28dp" android:background="#26FFFFFF" />
     
     <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginStart="10dp">
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="GPT" android:textColor="#FF4DC79E" android:textSize="11sp" android:textStyle="bold" />
