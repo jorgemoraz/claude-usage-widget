@@ -45,10 +45,18 @@ class RowWidget : AppWidgetProvider() {
             pct(v, R.id.c_5h, claude.firstOrNull { !it.isWeek })
             pct(v, R.id.g_week, gpt.firstOrNull { it.isWeek })
             pct(v, R.id.g_5h, gpt.firstOrNull { !it.isWeek })
+            // Si no hay datos, se muestra el motivo en lugar de guiones
+            val cErr = Store.error(c, "claude").takeIf { claude.isEmpty() }
+            val gErr = Store.error(c, "gpt").takeIf { gpt.isEmpty() }
+            v.setTextViewText(R.id.c_err, cErr ?: "")
+            v.setViewVisibility(R.id.c_err, if (cErr != null) View.VISIBLE else View.GONE)
+            v.setViewVisibility(R.id.c_vals, if (cErr != null) View.GONE else View.VISIBLE)
+            v.setTextViewText(R.id.g_err, gErr ?: "")
+            v.setViewVisibility(R.id.g_err, if (gErr != null) View.VISIBLE else View.GONE)
+            v.setViewVisibility(R.id.g_vals, if (gErr != null) View.GONE else View.VISIBLE)
             val note = when {
                 refreshing -> "…"
                 AppUpdater.hasUpdate(c) -> "⬆︎"
-                claude.isEmpty() && Store.error(c, "claude") != null -> "!"
                 else -> ""
             }
             v.setTextViewText(R.id.note, note)
