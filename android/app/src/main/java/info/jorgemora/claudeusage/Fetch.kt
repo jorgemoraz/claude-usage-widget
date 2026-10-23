@@ -94,7 +94,7 @@ object Fetch {
     suspend fun all(c: Context) {
         handle(c, "claude", "claude.ai", WebFetcher.run(c, "https://claude.ai/", CLAUDE_JS), Parse::claude)
         handle(c, "gpt", "chatgpt.com", WebFetcher.run(c, "https://chatgpt.com/", GPT_JS), Parse::gpt)
-        AppUpdater.check(c)
         UsageWidget.updateAll(c)
+        AppUpdater.backgroundUpdate(c)
     }
 }
