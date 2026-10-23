@@ -1,0 +1,37 @@
+name: Android
+on:
+  push:
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_PATH: ${{ github.workspace }}/../signing/release.keystore
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.10.2" }
+      # La clave de firma no está en el repositorio: se genera una vez y se guarda en la caché privada de Actions
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../signing
+          key: android-signing-key-v1
+      - name: Clave de firma
+        run: |
+          if [ ! -f "$KEYSTORE_PATH" ]; then
+            mkdir -p "$(dirname "$KEYSTORE_PATH")"
+            keytool -genkeypair -keystore "$KEYSTORE_PATH" -storepass claudeusage -keypass claudeusage \
+              -alias claudeusage -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Uso de Claude, C=ES"
+          fi
+      - run: gradle -p android assembleRelease --no-daemon --stacktrace
+      - name: Publicar APK
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk UsoDeClaude.apk
+          gh release delete android-latest -y --cleanup-tag || true
+          gh release create android-latest UsoDeClaude.apk --title "Uso de Claude para Android (versión ${{ github.run_number }})" --notes "Descarga UsoDeClaude.apk en el móvil e instálalo." --prerelease

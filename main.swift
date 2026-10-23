@@ -227,14 +227,15 @@ enum Updater {
     static var installed: String? { read("version") }
 
     static func latest(_ completion: @escaping (String?) -> Void) {
-        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/commits/main")!,
+        // Solo cuentan los cambios del widget de Mac (no los de la app de Android)
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/commits?path=main.swift&per_page=1")!,
                              cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        req.setValue("application/vnd.github.sha", forHTTPHeaderField: "Accept")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("ClaudeUsageWidget", forHTTPHeaderField: "User-Agent")
         URLSession.shared.dataTask(with: req) { data, resp, _ in
             guard (resp as? HTTPURLResponse)?.statusCode == 200, let data = data,
-                  let sha = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  sha.count == 40 else { return completion(nil) }
+                  let list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]],
+                  let sha = list.first?["sha"] as? String, sha.count == 40 else { return completion(nil) }
             completion(sha)
         }.resume()
     }

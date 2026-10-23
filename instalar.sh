@@ -36,7 +36,7 @@ if ! xcrun --find swiftc >/dev/null 2>&1; then
 fi
 
 if [[ -z "$SHA" ]]; then
-  SHA="$(curl -fsSL -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/${REPO}/commits/main")"
+  SHA="$(curl -fsSL "https://api.github.com/repos/${REPO}/commits?path=main.swift&per_page=1" | grep -m1 '"sha"' | cut -d'"' -f4)"
 fi
 
 BUILD_DIR="$(mktemp -d)"
