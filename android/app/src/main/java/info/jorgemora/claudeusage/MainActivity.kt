@@ -57,7 +57,7 @@ class MainActivity : Activity() {
         }
         root.addView(mascot)
         root.addView(text("Uso de Claude", 28f, bold = true).apply { gravity = Gravity.CENTER_HORIZONTAL })
-        root.addView(text("Inicia sesión una vez en cada servicio. Entra con tu correo: el botón de Google no funciona dentro de las apps.", 14f, 0xFFB8B0AE.toInt()))
+        root.addView(text("Inicia sesión una vez en cada servicio. Entra con tu correo y escribe el código que te llega; no toques el enlace del correo, porque se abriría en otra app. La ventana se cierra sola al entrar.", 14f, 0xFFB8B0AE.toInt()))
         root.addView(button("Iniciar sesión en Claude") { login("https://claude.ai/login") })
         root.addView(button("Iniciar sesión en ChatGPT") { login("https://chatgpt.com/auth/login") })
         root.addView(button("Actualizar ahora") { refresh() })

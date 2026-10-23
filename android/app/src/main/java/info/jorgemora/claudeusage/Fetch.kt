@@ -40,6 +40,7 @@ object WebFetcher {
                     }
                     wv.settings.javaScriptEnabled = true
                     wv.settings.domStorageEnabled = true
+                    wv.settings.userAgentString = browserUA(ctx)
                     wv.addJavascriptInterface(Bridge { finish(it) }, "Bridge")
                     val script = "(async () => { try { const r = await (async () => {" + js +
                         "})(); Bridge.post(JSON.stringify(r)); } catch (e) { Bridge.post(JSON.stringify({status: -1, body: String(e)})); } })();"
