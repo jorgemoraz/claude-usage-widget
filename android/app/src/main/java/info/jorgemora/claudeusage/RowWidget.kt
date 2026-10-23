@@ -56,7 +56,6 @@ class RowWidget : AppWidgetProvider() {
             v.setViewVisibility(R.id.g_vals, if (gErr != null) View.GONE else View.VISIBLE)
             val note = when {
                 refreshing -> "…"
-                AppUpdater.hasUpdate(c) -> "⬆︎"
                 else -> ""
             }
             v.setTextViewText(R.id.note, note)

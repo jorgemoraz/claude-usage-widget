@@ -4,52 +4,122 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.webkit.JavascriptInterface
+import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.coroutines.resume
 
-/** Navegador invisible: abre la web con tu sesión y hace la consulta como lo haría la propia web. */
-object WebFetcher {
-    private class Bridge(val onResult: (String) -> Unit) {
-        @JavascriptInterface
-        fun post(s: String) = onResult(s)
+/** Resultado de una consulta: código HTTP y cuerpo */
+data class Res(val status: Int, val body: String)
+
+/**
+ * Consulta directa con la sesión guardada (cookies de la app). Funciona en segundo plano,
+ * sin abrir ningún navegador. Es la vía que usa el widget.
+ */
+object Http {
+    private fun get(url: String, ua: String, cookie: String?, headers: Map<String, String> = emptyMap()): Res {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 15000
+        conn.readTimeout = 20000
+        conn.setRequestProperty("User-Agent", ua)
+        conn.setRequestProperty("Accept", "application/json")
+        if (cookie != null) conn.setRequestProperty("Cookie", cookie)
+        headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+        val code = conn.responseCode
+        val body = runCatching { (if (code < 400) conn.inputStream else conn.errorStream)?.bufferedReader()?.readText() }
+            .getOrNull() ?: ""
+        conn.disconnect()
+        return Res(code, body)
     }
 
+    suspend fun claude(c: Context): Res = withContext(Dispatchers.IO) {
+        val ua = browserUA(c)
+        val cookie = CookieManager.getInstance().getCookie("https://claude.ai")
+            ?: return@withContext Res(401, "")
+        val orgs = get("https://claude.ai/api/organizations", ua, cookie)
+        if (orgs.status != 200) return@withContext orgs
+        val list = JSONArray(orgs.body)
+        var org: JSONObject? = null
+        for (i in 0 until list.length()) {
+            val o = list.getJSONObject(i)
+            val caps = o.optJSONArray("capabilities")?.toString() ?: ""
+            if (caps.contains("\"chat\"")) { org = o; break }
+        }
+        if (org == null && list.length() > 0) org = list.getJSONObject(0)
+        val id = org?.optString("uuid") ?: return@withContext Res(404, "")
+        get("https://claude.ai/api/organizations/$id/usage", ua, cookie)
+    }
+
+    suspend fun gpt(c: Context): Res = withContext(Dispatchers.IO) {
+        val ua = browserUA(c)
+        val cookie = CookieManager.getInstance().getCookie("https://chatgpt.com")
+            ?: return@withContext Res(401, "")
+        val s = get("https://chatgpt.com/api/auth/session", ua, cookie)
+        if (s.status != 200) return@withContext s
+        val session = runCatching { JSONObject(s.body) }.getOrNull() ?: return@withContext Res(401, "")
+        val token = session.optString("accessToken").takeIf { it.isNotEmpty() } ?: return@withContext Res(401, "")
+        val h = mutableMapOf("Authorization" to "Bearer $token")
+        session.optJSONObject("account")?.optString("id")?.takeIf { it.isNotEmpty() }?.let { h["chatgpt-account-id"] = it }
+        get("https://chatgpt.com/backend-api/wham/usage", ua, cookie, h)
+    }
+}
+
+/**
+ * Plan B, solo con la app abierta: la misma consulta hecha desde dentro de la web,
+ * por si la web bloquea la consulta directa. Sin puentes JavaScript.
+ */
+object WebFetcher {
     @SuppressLint("SetJavaScriptEnabled")
-    suspend fun run(ctx: Context, url: String, js: String, timeoutMs: Long = 40_000): String? =
+    suspend fun run(ctx: Context, url: String, js: String, timeoutMs: Long = 40_000): Res? =
         withContext(Dispatchers.Main) {
             withTimeoutOrNull(timeoutMs) {
                 suspendCancellableCoroutine { cont ->
                     val main = Handler(Looper.getMainLooper())
-                    val wv = WebView(ctx.applicationContext)
+                    val wv = WebView(ctx)
                     var done = false
-                    fun finish(result: String?) {
-                        main.post {
-                            if (done) return@post
-                            done = true
-                            wv.stopLoading()
-                            wv.destroy()
-                            if (cont.isActive) cont.resume(result)
-                        }
+                    fun finish(r: Res?) {
+                        if (done) return
+                        done = true
+                        wv.stopLoading()
+                        wv.destroy()
+                        if (cont.isActive) cont.resume(r)
                     }
                     wv.settings.javaScriptEnabled = true
                     wv.settings.domStorageEnabled = true
                     wv.settings.userAgentString = browserUA(ctx)
-                    wv.addJavascriptInterface(Bridge { finish(it) }, "Bridge")
-                    val script = "(async () => { try { const r = await (async () => {" + js +
-                        "})(); Bridge.post(JSON.stringify(r)); } catch (e) { Bridge.post(JSON.stringify({status: -1, body: String(e)})); } })();"
-                    wv.webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView, u: String) {
-                            if (!done) view.evaluateJavascript(script, null)
+                    val start = "window.__uso = ''; (async () => { try { const r = await (async () => {" + js +
+                        "})(); window.__uso = JSON.stringify(r); } catch (e) { window.__uso = JSON.stringify({status: -1, body: String(e)}); } })(); 'ok'"
+                    fun poll(left: Int) {
+                        if (done) return
+                        wv.evaluateJavascript("window.__uso || ''") { v ->
+                            // evaluateJavascript devuelve la cadena entrecomillada en JSON
+                            val s = runCatching { JSONArray("[$v]").getString(0) }.getOrNull() ?: ""
+                            if (s.isNotEmpty()) {
+                                val o = runCatching { JSONObject(s) }.getOrNull()
+                                finish(o?.let { Res(it.optInt("status"), it.optString("body")) })
+                            } else if (left > 0) {
+                                main.postDelayed({ poll(left - 1) }, 400)
+                            } else finish(null)
                         }
                     }
-                    cont.invokeOnCancellation { main.post { if (!done) { done = true; wv.destroy() } } }
+                    var started = false
+                    wv.webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView, u: String) {
+                            if (done || started) return
+                            started = true
+                            view.evaluateJavascript(start, null)
+                            main.postDelayed({ poll(60) }, 400)
+                        }
+                    }
+                    cont.invokeOnCancellation { main.post { finish(null) } }
                     wv.loadUrl(url)
                 }
             }
@@ -77,24 +147,34 @@ object Fetch {
         return {status: r.status, body: await r.text()};
     """
 
-    private fun handle(c: Context, key: String, site: String, res: String?, parse: (String) -> List<Row>) {
+    private fun handle(c: Context, key: String, site: String, res: Res?, parse: (String) -> List<Row>) {
         if (res == null) return Store.save(c, key, null, "Sin respuesta de $site")
         try {
-            val o = JSONObject(res)
-            when (val st = o.optInt("status")) {
-                401, 403 -> Store.save(c, key, null, "Inicia sesión en $site desde la app")
-                200 -> Store.save(c, key, parse(o.optString("body")), null)
-                else -> Store.save(c, key, null, "Error $st de $site")
+            when (res.status) {
+                401 -> Store.save(c, key, null, "Inicia sesión en $site desde la app")
+                403 -> Store.save(c, key, null, "$site bloqueó la consulta (403). Abre la app")
+                200 -> Store.save(c, key, parse(res.body), null)
+                else -> Store.save(c, key, null, "Error ${res.status} de $site")
             }
         } catch (e: Exception) {
             Store.save(c, key, null, e.message ?: "Error")
         }
     }
 
-    suspend fun all(c: Context) {
-        handle(c, "claude", "claude.ai", WebFetcher.run(c, "https://claude.ai/", CLAUDE_JS), Parse::claude)
-        handle(c, "gpt", "chatgpt.com", WebFetcher.run(c, "https://chatgpt.com/", GPT_JS), Parse::gpt)
-        UsageWidget.updateAll(c)
-        AppUpdater.backgroundUpdate(c)
+    /**
+     * foreground = true cuando la app está abierta: si la consulta directa falla,
+     * se reintenta desde dentro de la web.
+     */
+    suspend fun all(c: Context, foreground: Boolean = false) {
+        runCatching {
+            var r = runCatching { Http.claude(c) }.getOrNull()
+            if (foreground && (r == null || r.status != 200)) r = WebFetcher.run(c, "https://claude.ai/", CLAUDE_JS) ?: r
+            handle(c, "claude", "claude.ai", r, Parse::claude)
+
+            var g = runCatching { Http.gpt(c) }.getOrNull()
+            if (foreground && (g == null || g.status != 200)) g = WebFetcher.run(c, "https://chatgpt.com/", GPT_JS) ?: g
+            handle(c, "gpt", "chatgpt.com", g, Parse::gpt)
+        }
+        runCatching { UsageWidget.updateAll(c) }
     }
 }

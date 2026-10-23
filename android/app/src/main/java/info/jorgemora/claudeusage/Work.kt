@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 
 class UsageWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
-        Fetch.all(applicationContext)
+        runCatching { Fetch.all(applicationContext) }
         return Result.success()
     }
 }
