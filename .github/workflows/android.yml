@@ -9,29 +9,41 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     env:
-      KEYSTORE_PATH: ${{ github.workspace }}/../signing/release.keystore
+      KEYSTORE_PATH: ${{ github.workspace }}/android/signing/release.keystore
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "17" }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "8.10.2" }
-      # La clave de firma no está en el repositorio: se genera una vez y se guarda en la caché privada de Actions
+      # La clave de firma no está en el repositorio: vive en la caché privada de Actions.
+      # Tiene que ser siempre la misma o Android no deja actualizar la app.
       - uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/../signing
-          key: android-signing-key-v1
+          path: android/signing
+          key: android-signing-key-v2
       - name: Clave de firma
         run: |
           if [ ! -f "$KEYSTORE_PATH" ]; then
-            mkdir -p "$(dirname "$KEYSTORE_PATH")"
+            if [ -f android/signing-cert.sha256 ]; then
+              echo "::error::Se ha perdido la clave de firma guardada; no se publica para no romper las actualizaciones"
+              exit 1
+            fi
+            mkdir -p android/signing
             keytool -genkeypair -keystore "$KEYSTORE_PATH" -storepass claudeusage -keypass claudeusage \
               -alias claudeusage -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Uso de Claude, C=ES"
+          fi
+          FP=$(keytool -list -v -keystore "$KEYSTORE_PATH" -storepass claudeusage -alias claudeusage | grep -m1 'SHA256:' | awk '{print $2}')
+          echo "Huella de la clave: $FP"
+          if [ -f android/signing-cert.sha256 ] && [ "$(tr -d '[:space:]' < android/signing-cert.sha256)" != "$FP" ]; then
+            echo "::error::La clave de firma no coincide con la publicada"
+            exit 1
           fi
       - run: gradle -p android assembleRelease --no-daemon --stacktrace
       - name: Publicar APK
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk UsoDeClaude.apk
+          N=${{ github.run_number }}
+          cp android/app/build/outputs/apk/release/app-release.apk "UsoDeClaude-v$N.apk"
           gh release delete android-latest -y --cleanup-tag || true
-          gh release create android-latest UsoDeClaude.apk --title "Uso de Claude para Android (versión ${{ github.run_number }})" --notes "Descarga UsoDeClaude.apk en el móvil e instálalo." --prerelease
+          gh release create android-latest "UsoDeClaude-v$N.apk" --title "Uso de Claude para Android (versión $N)" --notes "Descarga UsoDeClaude-v$N.apk en el móvil e instálalo encima de la anterior." --prerelease

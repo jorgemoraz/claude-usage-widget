@@ -12,14 +12,17 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
     companion object {
-        const val APK_URL = "https://github.com/jorgemoraz/claude-usage-widget/releases/download/android-latest/UsoDeClaude.apk"
+        const val RELEASE_PAGE = "https://github.com/jorgemoraz/claude-usage-widget/releases/tag/android-latest"
+        const val RELEASE_API = "https://api.github.com/repos/jorgemoraz/claude-usage-widget/releases/tags/android-latest"
     }
 
     private val scope = MainScope()
@@ -57,6 +60,8 @@ class MainActivity : Activity() {
         }
         root.addView(mascot)
         root.addView(text("Uso de Claude", 28f, bold = true).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
+        root.addView(text("Versión $ver", 13f, 0xFF8F8786.toInt()).apply { gravity = Gravity.CENTER_HORIZONTAL })
         root.addView(text("Inicia sesión una vez en cada servicio. Entra con tu correo y escribe el código que te llega; no toques el enlace del correo, porque se abriría en otra app. La ventana se cierra sola al entrar.", 14f, 0xFFB8B0AE.toInt()))
         root.addView(button("Iniciar sesión en Claude") { login("https://claude.ai/login") })
         root.addView(button("Iniciar sesión en ChatGPT") { login("https://chatgpt.com/auth/login") })
@@ -64,9 +69,7 @@ class MainActivity : Activity() {
         status = text("", 18f)
         root.addView(status)
         root.addView(text("Para añadir el widget: mantén pulsado el escritorio › Widgets › Uso de Claude. Tócalo para actualizar; toca la mascota para abrir esta pantalla.", 13f, 0xFF8F8786.toInt()))
-        updateButton = button("Descargar la última versión") {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)))
-        }
+        updateButton = button("Descargar la última versión") { openLatest() }
         root.addView(updateButton)
 
         setContentView(ScrollView(this).apply {
@@ -97,6 +100,25 @@ class MainActivity : Activity() {
         scope.launch {
             Fetch.all(this@MainActivity, foreground = true)
             show()
+        }
+    }
+
+    /** Pide a GitHub el enlace exacto de la última versión (cada versión tiene nombre propio, sin cachés) */
+    private fun openLatest() {
+        updateButton.text = "Buscando la última versión…"
+        scope.launch {
+            val info = withContext(Dispatchers.IO) {
+                runCatching {
+                    val conn = java.net.URL(RELEASE_API).openConnection() as java.net.HttpURLConnection
+                    conn.setRequestProperty("Accept", "application/vnd.github+json")
+                    conn.setRequestProperty("User-Agent", "UsoDeClaude-Android")
+                    val o = org.json.JSONObject(conn.inputStream.bufferedReader().readText())
+                    val asset = o.getJSONArray("assets").getJSONObject(0)
+                    Pair(o.optString("name"), asset.getString("browser_download_url"))
+                }.getOrNull()
+            }
+            updateButton.text = "Descargar la última versión"
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info?.second ?: RELEASE_PAGE)))
         }
     }
 
