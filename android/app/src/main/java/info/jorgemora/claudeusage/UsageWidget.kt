@@ -71,7 +71,7 @@ class UsageWidget : AppWidgetProvider() {
 
             v.setImageViewResource(R.id.mascot, mood.drawable)
             v.setTextViewText(R.id.phrase, if (claude.isEmpty()) "Abre la app e inicia sesión" else mood.phrase())
-            v.setTextViewText(R.id.big, session?.let { "${it.percent.roundToInt()} % de la sesión" } ?: "–")
+            v.setTextViewText(R.id.big, session?.let { "${it.percent.roundToInt()} %" } ?: "–")
             v.setTextColor(R.id.big, usageColor(session?.percent ?: 0.0))
 
             val cErr = Store.error(c, "claude")

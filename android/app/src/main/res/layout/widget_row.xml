@@ -11,9 +11,9 @@
         <TextView android:id="@+id/c_err" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#FFFFB366" android:textSize="10sp" android:maxLines="2" android:ellipsize="end" android:visibility="gone" />
         <LinearLayout android:id="@+id/c_vals" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="bottom">
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="sem " android:textColor="#8CFFFFFF" android:textSize="11sp" />
-            <TextView android:id="@+id/c_week" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textSize="15sp" android:textStyle="bold" android:textColor="#FFFFFFFF" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="   5h " android:textColor="#8CFFFFFF" android:textSize="11sp" />
-            <TextView android:id="@+id/c_5h" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textSize="15sp" android:textStyle="bold" android:textColor="#FFFFFFFF" />
+            <TextView android:id="@+id/c_week" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textSize="19sp" android:textStyle="bold" android:textColor="#FFFFFFFF" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="  5h " android:textColor="#8CFFFFFF" android:textSize="11sp" />
+            <TextView android:id="@+id/c_5h" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textSize="19sp" android:textStyle="bold" android:textColor="#FFFFFFFF" />
         </LinearLayout>
     </LinearLayout>
     <FrameLayout android:layout_width="1dp" android:layout_height="28dp" android:background="#26FFFFFF" />
@@ -23,9 +23,9 @@
         <TextView android:id="@+id/g_err" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#FFFFB366" android:textSize="10sp" android:maxLines="2" android:ellipsize="end" android:visibility="gone" />
         <LinearLayout android:id="@+id/g_vals" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="bottom">
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="sem " android:textColor="#8CFFFFFF" android:textSize="11sp" />
-            <TextView android:id="@+id/g_week" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textSize="15sp" android:textStyle="bold" android:textColor="#FFFFFFFF" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="   5h " android:textColor="#8CFFFFFF" android:textSize="11sp" />
-            <TextView android:id="@+id/g_5h" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textSize="15sp" android:textStyle="bold" android:textColor="#FFFFFFFF" />
+            <TextView android:id="@+id/g_week" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textSize="19sp" android:textStyle="bold" android:textColor="#FFFFFFFF" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="  5h " android:textColor="#8CFFFFFF" android:textSize="11sp" />
+            <TextView android:id="@+id/g_5h" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textSize="19sp" android:textStyle="bold" android:textColor="#FFFFFFFF" />
         </LinearLayout>
     </LinearLayout>
     <TextView android:id="@+id/note" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#FFFFB366" android:textSize="14sp" android:textStyle="bold" android:visibility="gone" />

@@ -1039,7 +1039,7 @@ struct RowView: View {
                     .minimumScaleFactor(0.7)
                 Spacer(minLength: 4)
                 Text("\(Int(row.percent.rounded())) %")
-                    .font(.system(size: 13 * k, weight: .semibold, design: .rounded))
+                    .font(.system(size: 18 * k, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundColor(usageColor(row.percent))
                     .contentTransition(.numericText())
@@ -1188,7 +1188,7 @@ struct WidgetView: View {
         if let s = session {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text("\(Int(s.percent.rounded()))")
-                    .font(.system(size: 26 * k, weight: .bold, design: .rounded))
+                    .font(.system(size: 36 * k, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundColor(usageColor(s.percent))
                     .contentTransition(.numericText())
@@ -1262,7 +1262,7 @@ struct WidgetView: View {
                 mascot(34 * z, mood, celebrating)
                 if let s = session {
                     Text("\(Int(s.percent.rounded()))%")
-                        .font(.system(size: 17 * z, weight: .bold, design: .rounded))
+                        .font(.system(size: 22 * z, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundColor(usageColor(s.percent))
                         .contentTransition(.numericText())
@@ -1270,7 +1270,7 @@ struct WidgetView: View {
                 }
                 if model.showGPT, let g = gptHeadline {
                     Text("· GPT \(Int(g.percent.rounded()))%")
-                        .font(.system(size: 11 * z, weight: .semibold, design: .rounded))
+                        .font(.system(size: 15 * z, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundColor(.white.opacity(0.6))
                 }
@@ -1362,7 +1362,7 @@ struct WidgetView: View {
                 if let s = session {
                     VStack(spacing: 0) {
                         Text("\(Int(s.percent.rounded()))%")
-                            .font(.system(size: 30 * z, weight: .bold, design: .rounded))
+                            .font(.system(size: 40 * z, weight: .bold, design: .rounded))
                             .monospacedDigit()
                             .foregroundColor(usageColor(s.percent))
                             .contentTransition(.numericText())
@@ -1387,7 +1387,7 @@ struct WidgetView: View {
             Text(label).font(.system(size: 9 * z)).foregroundColor(.white.opacity(0.5))
             UsageBar(percent: percent, pace: nil, height: 4 * z)
             Text("\(Int(percent.rounded()))%")
-                .font(.system(size: 9 * z, weight: .semibold)).monospacedDigit()
+                .font(.system(size: 12 * z, weight: .semibold)).monospacedDigit()
                 .foregroundColor(usageColor(percent))
         }
     }
@@ -1669,7 +1669,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func updateStatusItem() {
         guard let button = statusItem?.button else { return }
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         let title = NSMutableAttributedString()
         func icon(_ img: NSImage) {
             let a = NSTextAttachment()

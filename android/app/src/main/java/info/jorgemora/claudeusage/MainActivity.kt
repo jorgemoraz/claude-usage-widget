@@ -61,7 +61,7 @@ class MainActivity : Activity() {
         root.addView(button("Iniciar sesión en Claude") { login("https://claude.ai/login") })
         root.addView(button("Iniciar sesión en ChatGPT") { login("https://chatgpt.com/auth/login") })
         root.addView(button("Actualizar ahora") { refresh() })
-        status = text("", 15f)
+        status = text("", 18f)
         root.addView(status)
         root.addView(text("Para añadir el widget: mantén pulsado el escritorio › Widgets › Uso de Claude. Tócalo para actualizar; toca la mascota para abrir esta pantalla.", 13f, 0xFF8F8786.toInt()))
         updateButton = button("Descargar la última versión") {
