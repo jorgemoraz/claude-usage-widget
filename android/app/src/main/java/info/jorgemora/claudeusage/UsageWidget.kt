@@ -10,6 +10,10 @@ import android.content.res.ColorStateList
 import android.os.Build
 import android.view.View
 import android.widget.RemoteViews
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 class UsageWidget : AppWidgetProvider() {
@@ -27,7 +31,16 @@ class UsageWidget : AppWidgetProvider() {
         super.onReceive(c, intent)
         if (intent.action == ACTION_REFRESH) {
             updateAll(c, refreshing = true)
-            Scheduler.now(c)
+            // Consulta al momento, sin esperar a que Android programe la tarea
+            val pending = goAsync()
+            CoroutineScope(Dispatchers.IO).launch {
+                val ok = withTimeoutOrNull(40_000) { Fetch.quick(c); true } ?: false
+                if (!ok) {
+                    runCatching { updateAll(c) }
+                    Scheduler.now(c)
+                }
+                pending.finish()
+            }
         }
     }
 

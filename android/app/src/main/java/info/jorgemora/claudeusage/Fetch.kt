@@ -8,6 +8,8 @@ import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -27,8 +29,8 @@ data class Res(val status: Int, val body: String)
 object Http {
     private fun get(url: String, ua: String, cookie: String?, headers: Map<String, String> = emptyMap()): Res {
         val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 15000
-        conn.readTimeout = 20000
+        conn.connectTimeout = 8000
+        conn.readTimeout = 10000
         conn.setRequestProperty("User-Agent", ua)
         conn.setRequestProperty("Accept", "application/json")
         if (cookie != null) conn.setRequestProperty("Cookie", cookie)
@@ -165,6 +167,17 @@ object Fetch {
      * foreground = true cuando la app está abierta: si la consulta directa falla,
      * se reintenta desde dentro de la web.
      */
+    /** Al tocar el widget: Claude y ChatGPT a la vez, por la vía directa (sin navegador) */
+    suspend fun quick(c: Context) {
+        coroutineScope {
+            val r = async { runCatching { Http.claude(c) }.getOrNull() }
+            val g = async { runCatching { Http.gpt(c) }.getOrNull() }
+            handle(c, "claude", "claude.ai", r.await(), Parse::claude)
+            handle(c, "gpt", "chatgpt.com", g.await(), Parse::gpt)
+        }
+        runCatching { UsageWidget.updateAll(c) }
+    }
+
     suspend fun all(c: Context, foreground: Boolean = false) {
         runCatching {
             var r = runCatching { Http.claude(c) }.getOrNull()
