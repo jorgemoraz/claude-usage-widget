@@ -865,6 +865,23 @@ namespace UsoDeClaude
         [STAThread]
         public static void Main()
         {
+            // Prueba automática en GitHub: abre la ventana, mide y sale
+            if (Environment.GetEnvironmentVariable("WIDGET_SELFTEST") != null)
+            {
+                var tapp = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                var tw = new Widget();
+                tw.Show();
+                var tt = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+                tt.Tick += (_, __) =>
+                {
+                    File.WriteAllText("selftest.txt", $"ventana={tw.ActualWidth:0}x{tw.ActualHeight:0} version={Updater.Current}");
+                    tapp.Shutdown();
+                };
+                tt.Start();
+                tapp.Run();
+                return;
+            }
+
             // Primera ejecución desde Descargas: se copia a su sitio y se abre desde allí
             if (Updater.EnsureInstalled()) return;
             using var single = new System.Threading.Mutex(true, "UsoDeClaude-unico", out bool first);

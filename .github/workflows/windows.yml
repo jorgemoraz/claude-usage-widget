@@ -14,6 +14,14 @@ jobs:
         with: { dotnet-version: "8.0.x" }
       - name: Compilar
         run: dotnet publish windows/UsoDeClaude.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:BuildNumber=${{ github.run_number }} -o out
+      - name: Prueba de arranque
+        shell: pwsh
+        run: |
+          $env:WIDGET_SELFTEST = "1"
+          $p = Start-Process -FilePath "out/UsoDeClaude.exe" -PassThru -WorkingDirectory "$PWD"
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "La app no terminó la prueba" }
+          if (-not (Test-Path selftest.txt)) { throw "La app se cerró sin completar la prueba (código $($p.ExitCode))" }
+          Get-Content selftest.txt
       - name: Publicar
         shell: bash
         env: { GH_TOKEN: "${{ github.token }}" }
