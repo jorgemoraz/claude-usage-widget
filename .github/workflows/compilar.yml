@@ -1,7 +1,7 @@
 name: Compilar
 on:
   push:
-    paths-ignore: ["android/**", ".github/workflows/android.yml"]
+    paths-ignore: ["android/**", "windows/**", ".github/workflows/android.yml", ".github/workflows/windows.yml", ".github/workflows/mantener-clave.yml"]
   workflow_dispatch:
 jobs:
   build:

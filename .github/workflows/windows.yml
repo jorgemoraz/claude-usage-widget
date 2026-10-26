@@ -1,0 +1,25 @@
+name: Windows
+on:
+  push:
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
+      - name: Compilar
+        run: dotnet publish windows/UsoDeClaude.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:BuildNumber=${{ github.run_number }} -o out
+      - name: Publicar
+        shell: bash
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          N=${{ github.run_number }}
+          cp out/UsoDeClaude.exe "UsoDeClaude-Windows-v$N.exe"
+          ls -la "UsoDeClaude-Windows-v$N.exe"
+          gh release delete windows-latest -y --cleanup-tag || true
+          gh release create windows-latest "UsoDeClaude-Windows-v$N.exe" --title "Uso de Claude para Windows (versión $N)" --notes "Descarga el .exe y ábrelo. Se instala solo y se actualiza solo." --prerelease
