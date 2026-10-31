@@ -4,7 +4,8 @@
     <application
         android:label="Uso de Claude"
         android:icon="@drawable/mascot_feliz"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:networkSecurityConfig="@xml/red">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

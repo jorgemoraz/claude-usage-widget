@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- El cerebro de Moni se alcanza por http dentro de Tailscale, que ya cifra el tráfico (WireGuard).
+     Las direcciones de Tailscale son IPs (100.64.0.0/10), que no se pueden listar aquí: se permite http en general,
+     y la app solo lo usa para el cerebro de Moni (Claude y ChatGPT van por https). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

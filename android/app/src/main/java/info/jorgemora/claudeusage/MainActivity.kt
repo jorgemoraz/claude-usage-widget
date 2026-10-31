@@ -29,6 +29,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var mascot: ImageView
     private lateinit var updateButton: Button
+    private lateinit var moniButton: Button
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
 
@@ -66,6 +67,8 @@ class MainActivity : Activity() {
         root.addView(button("Iniciar sesión en Claude") { login("https://claude.ai/login") })
         root.addView(button("Iniciar sesión en ChatGPT") { login("https://chatgpt.com/auth/login") })
         root.addView(button("Actualizar ahora") { refresh() })
+        moniButton = button("") { connectMoni() }
+        root.addView(moniButton)
         status = text("", 18f)
         root.addView(status)
         root.addView(text("Para añadir el widget: mantén pulsado el escritorio › Widgets › Uso de Claude. Tócalo para actualizar; toca la mascota para abrir esta pantalla.", 13f, 0xFF8F8786.toInt()))
@@ -89,6 +92,30 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
+    }
+
+    /** Gastos del mes: se pega el enlace con token que da el cerebro de Moni (o se escanea su QR y se copia). */
+    private fun connectMoni() {
+        if (Gastos.configured(this)) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Gastos de Moni")
+                .setItems(arrayOf("Abrir el panel de gastos", "Desconectar")) { _, i ->
+                    if (i == 0) Gastos.panelUrl(this)?.let { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) }
+                    else { Gastos.forget(this); show(); UsageWidget.updateAll(this) }
+                }.show()
+            return
+        }
+        val field = android.widget.EditText(this).apply { hint = "http://100.…:8765/gastos?token=…" }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Conectar con Moni")
+            .setMessage("Pega el enlace que muestra el cerebro de Moni en el Mac (el QR). El móvil tiene que tener Tailscale encendido.")
+            .setView(field)
+            .setPositiveButton("Conectar") { _, _ ->
+                if (Gastos.configure(this, field.text.toString())) refresh()
+                else android.widget.Toast.makeText(this, "Ese enlace no vale", android.widget.Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun login(url: String) {
@@ -137,6 +164,20 @@ class MainActivity : Activity() {
         if (gpt.isEmpty()) sb.append("  ").append(Store.error(this, "gpt") ?: "Sin datos todavía").append("\n")
         gpt.forEach { sb.append(line(it)).append("\n") }
         Store.error(this, "gpt")?.takeIf { gpt.isNotEmpty() }?.let { sb.append("  ⚠︎ ").append(it).append("\n") }
+        moniButton.text = if (Gastos.configured(this)) "Gastos de Moni…" else "Conectar con Moni (gastos del mes)"
+        if (Gastos.configured(this)) {
+            sb.append("\nGASTOS DEL MES\n")
+            val g = Gastos.spend(this)
+            if (g != null) {
+                sb.append("  Gastado: ${euros(g.spentEUR)} · previsto ${euros(g.forecastEUR)}\n")
+                g.budgetUSD?.let { sb.append(String.format(java.util.Locale("es", "ES"), "  APIs: %.2f de %.0f $\n", g.apiUSD, it)) }
+                sb.append("  Tokens: ${tokensText(g.tokens)} (${tokensText(g.tokensApps)} apps, ${tokensText(g.tokensAPIs)} APIs)\n")
+                g.apps.forEach { (n, d) -> sb.append("    $n: $d\n") }
+                g.apis.forEach { (n, d) -> sb.append("    $n: $d\n") }
+                if (g.savedEUR > 0) sb.append("  Las suscripciones te ahorran ${euros(g.savedEUR)}\n")
+            }
+            Gastos.error(this)?.let { sb.append("  ⚠︎ ").append(it).append("\n") }
+        }
         status.text = sb.toString()
     }
 }

@@ -175,6 +175,7 @@ object Fetch {
             handle(c, "claude", "claude.ai", r.await(), Parse::claude)
             handle(c, "gpt", "chatgpt.com", g.await(), Parse::gpt)
         }
+        runCatching { Gastos.fetch(c) }
         runCatching { UsageWidget.updateAll(c) }
     }
 
@@ -188,6 +189,7 @@ object Fetch {
             if (foreground && (g == null || g.status != 200)) g = WebFetcher.run(c, "https://chatgpt.com/", GPT_JS) ?: g
             handle(c, "gpt", "chatgpt.com", g, Parse::gpt)
         }
+        runCatching { Gastos.fetch(c) }
         runCatching { UsageWidget.updateAll(c) }
     }
 }

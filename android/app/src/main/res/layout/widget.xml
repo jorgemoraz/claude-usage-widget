@@ -41,5 +41,13 @@
         </LinearLayout>
         <ProgressBar android:id="@+id/gw_bar" style="@android:style/Widget.Material.ProgressBar.Horizontal" android:layout_width="match_parent" android:layout_height="6dp" android:layout_marginTop="3dp" android:max="100" android:progress="0" android:progressTint="#FF5CCC80" android:progressBackgroundTint="#40FFFFFF" />
         <TextView android:id="@+id/gw_reset" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#80FFFFFF" android:textSize="10sp" />
+    <LinearLayout android:id="@+id/spend_box" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="GASTOS DEL MES" android:textColor="#73FFFFFF" android:textSize="10sp" android:textStyle="bold" android:letterSpacing="0.08" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="bottom" android:layout_marginTop="4dp">
+            <TextView android:id="@+id/spend_total" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="–" android:textColor="#FFFFFFFF" android:textSize="22sp" android:textStyle="bold" />
+            <TextView android:id="@+id/spend_forecast" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:textColor="#8CFFFFFF" android:textSize="11sp" />
+        </LinearLayout>
+        <TextView android:id="@+id/spend_detail" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#BFFFFFFF" android:textSize="11sp" />
+    </LinearLayout>
     <TextView android:id="@+id/footer" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:gravity="end" android:textColor="#66FFFFFF" android:textSize="10sp" android:text="Toca para actualizar" />
 </LinearLayout>

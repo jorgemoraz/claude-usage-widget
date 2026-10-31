@@ -24,6 +24,8 @@ Cada 10 minutos el widget consulta el último commit de `main`. Si es nuevo, des
 
 Si en el Mac está el cerebro de Moni (`~/.config/companero/token`), el widget añade una sección «Gastos del mes»: lo gastado de verdad (APIs, suscripciones y luz), lo previsto a fin de mes, el gasto de las APIs frente al presupuesto y los tokens del mes de Claude Code, Codex, Hermes y cada API. Lo lee de `http://127.0.0.1:8765/gastos`, sin salir del Mac. Clic derecho › «Abrir panel de gastos» abre el panel completo.
 
+En Android, la app muestra lo mismo si se conecta con el cerebro de Moni por Tailscale: «Conectar con Moni (gastos del mes)» y pegar el enlace con token que da el cerebro (`uv run dispositivos crear <nombre>`).
+
 ## Datos
 
 Lee el uso con las credenciales de Claude Code guardadas en el Llavero o, opcionalmente, con la cookie `sessionKey` de claude.ai (clic derecho › Configurar sessionKey). Ninguna credencial sale del Mac salvo hacia los servidores de Anthropic.

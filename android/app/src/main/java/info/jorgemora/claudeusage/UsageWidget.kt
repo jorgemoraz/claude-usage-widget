@@ -99,6 +99,20 @@ class UsageWidget : AppWidgetProvider() {
             bind(v, "g5", c, gpt.firstOrNull { !it.isWeek })
             bind(v, "gw", c, gpt.firstOrNull { it.isWeek })
 
+            val spend = if (Gastos.configured(c)) Gastos.spend(c) else null
+            val spendErr = if (Gastos.configured(c)) Gastos.error(c) else null
+            v.setViewVisibility(R.id.spend_box, if (spend != null || spendErr != null) View.VISIBLE else View.GONE)
+            if (spend != null) {
+                v.setTextViewText(R.id.spend_total, euros(spend.spentEUR))
+                v.setTextViewText(R.id.spend_forecast, "previsto ${euros(spend.forecastEUR)}")
+                val presupuesto = spend.budgetUSD?.let { String.format(java.util.Locale("es", "ES"), "APIs %.2f de %.0f $ · ", spend.apiUSD, it) } ?: ""
+                v.setTextViewText(R.id.spend_detail, presupuesto + "${tokensText(spend.tokens)} tokens" + (spendErr?.let { "\n⚠︎ $it" } ?: ""))
+            } else {
+                v.setTextViewText(R.id.spend_total, "–")
+                v.setTextViewText(R.id.spend_forecast, "")
+                v.setTextViewText(R.id.spend_detail, spendErr ?: "")
+            }
+
             val at = maxOf(Store.updated(c, "claude"), Store.updated(c, "gpt"))
             v.setTextViewText(R.id.footer, when {
                 refreshing -> "Actualizando…"
