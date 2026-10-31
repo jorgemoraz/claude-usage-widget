@@ -529,6 +529,100 @@ enum CodexLog {
     }
 }
 
+// MARK: - Gastos del mes (cerebro de Moni)
+
+/// Gastos y tokens del mes que calcula el cerebro de Moni en este Mac (http://127.0.0.1:8765/gastos).
+/// Solo aparece si el cerebro está instalado: lee su token de ~/.config/companero/token. Nada sale del Mac.
+struct MonthSpend: Equatable {
+    struct Line: Equatable, Identifiable { let id: String; let name: String; let detail: String }
+    var month = ""
+    var spentEUR = 0.0          // gastado de verdad hasta hoy (APIs + cuotas prorrateadas + luz)
+    var forecastEUR = 0.0       // previsto a fin de mes
+    var tokens = 0.0, tokensApps = 0.0, tokensAPIs = 0.0
+    var apiUSD = 0.0, budgetUSD: Double?
+    var savedEUR = 0.0          // lo que costaría a precio de API lo que va con suscripción, menos las cuotas
+    var apps: [Line] = []       // Claude Code, Codex, Hermes: tokens del mes
+    var apis: [Line] = []       // OpenAI, Soniox…: gasto y tokens del mes
+}
+
+enum MoniAPI {
+    static let base = "http://127.0.0.1:8765"
+    static var tokenFile: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/companero/token")
+    }
+    static var token: String? {
+        (try? String(contentsOf: tokenFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    static var available: Bool { token?.isEmpty == false }
+    static var panelURL: URL? { token.flatMap { URL(string: base + "/panel?token=" + $0) } }
+
+    enum MoniError: LocalizedError {
+        case noToken, down, http(Int), badData
+        var errorDescription: String? {
+            switch self {
+            case .noToken: return "No encuentro el cerebro de Moni en este Mac."
+            case .down: return "El cerebro de Moni no responde."
+            case .http(let c): return "El cerebro de Moni respondió con un error \(c)."
+            case .badData: return "Respuesta inesperada del cerebro de Moni."
+            }
+        }
+    }
+
+    static func fetch(_ completion: @escaping (Result<MonthSpend, Error>) -> Void) {
+        guard let t = token, !t.isEmpty else { return completion(.failure(MoniError.noToken)) }
+        var req = URLRequest(url: URL(string: base + "/gastos")!, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
+        req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+        req.httpShouldHandleCookies = false
+        URLSession.shared.dataTask(with: req) { data, resp, err in
+            if err != nil { return completion(.failure(MoniError.down)) }
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(code), let data = data else { return completion(.failure(MoniError.http(code))) }
+            completion(Result { try parse(data) })
+        }.resume()
+    }
+
+    static func num(_ v: Any?) -> Double { (v as? NSNumber)?.doubleValue ?? 0 }
+
+    static func parse(_ data: Data) throws -> MonthSpend {
+        guard let o = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let t = o["totales"] as? [String: Any] else { throw MoniError.badData }
+        var s = MonthSpend()
+        s.month = o["mes"] as? String ?? ""
+        s.spentEUR = num(t["real_eur_hasta_hoy"]); s.forecastEUR = num(t["real_eur_mes_previsto"])
+        s.tokens = num(t["tokens"]); s.tokensApps = num(t["tokens_suscripciones"]); s.tokensAPIs = num(t["tokens_apis"])
+        s.savedEUR = num(t["ahorro_suscripciones_eur"])
+        let moni = o["moni"] as? [String: Any] ?? [:]
+        s.apiUSD = num(moni["usd"]); s.budgetUSD = (moni["presupuesto_usd"] as? NSNumber)?.doubleValue
+        for (key, name) in [("claude", "Claude Code"), ("codex", "Codex"), ("hermes", "Hermes")] {
+            let a = o[key] as? [String: Any] ?? [:]
+            s.apps.append(.init(id: key, name: name, detail: tokensText(num(a["tokens"]))))
+        }
+        for a in o["apis"] as? [[String: Any]] ?? [] {
+            let usd = num(a["usd"]), tok = num(a["tokens"]), min = num(a["minutos"])
+            guard usd > 0 || tok > 0 else { continue }
+            var d = String(format: "%.2f $", usd)
+            if tok > 0 { d += " · " + tokensText(tok) }
+            if min >= 1 { d += " · \(Int(min.rounded())) min" }
+            s.apis.append(.init(id: a["nombre"] as? String ?? UUID().uuidString, name: a["nombre"] as? String ?? "API", detail: d))
+        }
+        return s
+    }
+}
+
+func tokensText(_ n: Double) -> String {
+    if n >= 1e9 { return String(format: "%.1f mil M", n / 1e9) }
+    if n >= 1e6 { return String(format: "%.0f M", n / 1e6) }
+    if n >= 1e3 { return String(format: "%.0f mil", n / 1e3) }
+    return "\(Int(n))"
+}
+
+func euros(_ v: Double) -> String {
+    let f = NumberFormatter()
+    f.locale = Locale(identifier: "es_ES"); f.numberStyle = .currency; f.currencyCode = "EUR"
+    f.maximumFractionDigits = v >= 100 ? 0 : 2
+    return f.string(from: NSNumber(value: v)) ?? String(format: "%.2f €", v)
+}
+
 // MARK: - Estado
 
 final class UsageModel: ObservableObject {
@@ -544,6 +638,15 @@ final class UsageModel: ObservableObject {
         didSet {
             UserDefaults.standard.set(showGPT, forKey: "showGPT")
             if showGPT { refreshGPT() }
+            DispatchQueue.main.async { self.onChange?() }
+        }
+    }
+    @Published var spend: MonthSpend?
+    @Published var spendError: String?
+    @Published var showSpend: Bool = UserDefaults.standard.object(forKey: "showSpend") as? Bool ?? MoniAPI.available {
+        didSet {
+            UserDefaults.standard.set(showSpend, forKey: "showSpend")
+            if showSpend { refreshSpend() }
             DispatchQueue.main.async { self.onChange?() }
         }
     }
@@ -621,8 +724,26 @@ final class UsageModel: ObservableObject {
         }
     }
 
+    private var lastSpendFetch = Date.distantPast
+
+    /// Los gastos cambian despacio y calcularlos cuesta un poco al cerebro: como mucho cada 10 minutos.
+    func refreshSpend(force: Bool = false) {
+        guard showSpend, force || Date().timeIntervalSince(lastSpendFetch) > 590 else { return }
+        lastSpendFetch = Date()
+        MoniAPI.fetch { r in
+            DispatchQueue.main.async {
+                switch r {
+                case .success(let s): self.spend = s; self.spendError = nil
+                case .failure(let e): self.spendError = e.localizedDescription
+                }
+                self.onChange?()
+            }
+        }
+    }
+
     func refresh() {
         refreshGPT()
+        refreshSpend()
         guard !loading else { return }
         loading = true
         DispatchQueue.global(qos: .utility).async {
@@ -1251,6 +1372,68 @@ struct WidgetView: View {
 
     var gptHeadline: UsageRow? { model.gptRows.max { $0.percent < $1.percent } }
 
+    func sectionTitle(_ t: String, k: CGFloat) -> some View {
+        HStack(spacing: 6) {
+            Text(t)
+                .font(.system(size: 9 * k, weight: .bold))
+                .tracking(0.8)
+                .foregroundColor(.white.opacity(0.45))
+            Rectangle().fill(Color.white.opacity(0.12)).frame(height: 0.5)
+        }
+    }
+
+    func spendLine(_ name: String, _ detail: String, k: CGFloat) -> some View {
+        HStack(spacing: 6) {
+            Text(name).font(.system(size: 11 * k)).foregroundColor(.white.opacity(0.75))
+            Spacer(minLength: 4)
+            Text(detail).font(.system(size: 11 * k, weight: .medium)).monospacedDigit().foregroundColor(.white.opacity(0.9))
+        }
+    }
+
+    @ViewBuilder
+    func spendSection(k: CGFloat, detailed: Bool = true) -> some View {
+        if model.showSpend && (model.spend != nil || model.spendError != nil) {
+            VStack(alignment: .leading, spacing: 6 * k) {
+                sectionTitle("GASTOS DEL MES", k: k)
+                if let s = model.spend {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(euros(s.spentEUR))
+                            .font(.system(size: 22 * k, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundColor(.white)
+                        Text("previsto \(euros(s.forecastEUR))")
+                            .font(.system(size: 10 * k)).foregroundColor(.white.opacity(0.55))
+                    }
+                    if let b = s.budgetUSD, b > 0 {
+                        HStack(spacing: 5 * k) {
+                            Text("APIs").font(.system(size: 9 * k)).foregroundColor(.white.opacity(0.5))
+                            UsageBar(percent: 100 * s.apiUSD / b, pace: nil, height: 4 * k)
+                            Text(String(format: "%.2f de %.0f $", s.apiUSD, b))
+                                .font(.system(size: 10 * k, weight: .semibold)).monospacedDigit()
+                                .foregroundColor(usageColor(100 * s.apiUSD / b))
+                        }
+                    }
+                    spendLine("Tokens", tokensText(s.tokens), k: k)
+                    if detailed {
+                        ForEach(s.apps) { spendLine("  " + $0.name, $0.detail, k: k) }
+                        ForEach(s.apis) { spendLine("  " + $0.name, $0.detail, k: k) }
+                        if s.savedEUR > 0 {
+                            Text("Las suscripciones te ahorran \(euros(s.savedEUR)) frente a pagar por API")
+                                .font(.system(size: 9 * k)).foregroundColor(.white.opacity(0.45))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                if let e = model.spendError {
+                    Text(model.spend == nil ? e : "⚠︎ \(e)")
+                        .font(.system(size: 10 * k))
+                        .foregroundColor(model.spend == nil ? .white.opacity(0.6) : Color(red: 1, green: 0.7, blue: 0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
     // MARK: Formatos
 
     @ViewBuilder
@@ -1291,6 +1474,10 @@ struct WidgetView: View {
                     if model.showGPT, let g = gptHeadline {
                         miniBar("ChatGPT", g.percent, z)
                     }
+                    if model.showSpend, let s = model.spend {
+                        Text("Mes: \(euros(s.spentEUR)) · \(tokensText(s.tokens)) tokens")
+                            .font(.system(size: 9 * z)).monospacedDigit().foregroundColor(.white.opacity(0.6))
+                    }
                 }
             }
             .padding(10 * z)
@@ -1317,6 +1504,7 @@ struct WidgetView: View {
                 }
                 rows(now, k: k)
                 gptSection(now, k: k)
+                spendSection(k: k)
                 Text(statusText(now))
                     .font(.system(size: 9 * k))
                     .foregroundColor(.white.opacity(0.4))
@@ -1374,6 +1562,7 @@ struct WidgetView: View {
                 VStack(alignment: .leading, spacing: 10 * z) {
                     rows(now, k: 0.9 * z, showReset: false)
                     gptSection(now, k: 0.9 * z, showReset: false)
+                    spendSection(k: 0.9 * z, detailed: false)
                 }
                 Text(statusText(now)).font(.system(size: 9 * z)).foregroundColor(.white.opacity(0.4))
             }
@@ -1403,8 +1592,12 @@ struct WidgetView: View {
         Button("Minimizar en la barra de menús") { actions.minimize() }
         Button("Mostrar desde cualquier sitio: ⌃⌥⌘U") {}.disabled(true)
         Divider()
-        Button("Actualizar ahora") { model.refresh() }
+        Button("Actualizar ahora") { model.refreshSpend(force: true); model.refresh() }
         Button(model.showGPT ? "✓ Mostrar ChatGPT" : "Mostrar ChatGPT") { model.showGPT.toggle() }
+        if MoniAPI.available {
+            Button(model.showSpend ? "✓ Mostrar gastos del mes" : "Mostrar gastos del mes") { model.showSpend.toggle() }
+            Button("Abrir panel de gastos") { if let u = MoniAPI.panelURL { NSWorkspace.shared.open(u) } }
+        }
         Button(model.alwaysOnTop ? "✓ Siempre por encima" : "Siempre por encima") { model.alwaysOnTop.toggle() }
         Button("Abrir uso en claude.ai") {
             NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!)

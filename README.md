@@ -20,6 +20,10 @@ curl -fsSL https://raw.githubusercontent.com/jorgemoraz/claude-usage-widget/main
 
 Cada 10 minutos el widget consulta el último commit de `main`. Si es nuevo, descarga ese `main.swift`, lo compila y se reinicia. Si la compilación falla, se queda la versión anterior y no lo reintenta hasta el siguiente commit. Registro en `~/Library/Logs/ClaudeUsage-update.log`.
 
+## Gastos del mes
+
+Si en el Mac está el cerebro de Moni (`~/.config/companero/token`), el widget añade una sección «Gastos del mes»: lo gastado de verdad (APIs, suscripciones y luz), lo previsto a fin de mes, el gasto de las APIs frente al presupuesto y los tokens del mes de Claude Code, Codex, Hermes y cada API. Lo lee de `http://127.0.0.1:8765/gastos`, sin salir del Mac. Clic derecho › «Abrir panel de gastos» abre el panel completo.
+
 ## Datos
 
 Lee el uso con las credenciales de Claude Code guardadas en el Llavero o, opcionalmente, con la cookie `sessionKey` de claude.ai (clic derecho › Configurar sessionKey). Ninguna credencial sale del Mac salvo hacia los servidores de Anthropic.
