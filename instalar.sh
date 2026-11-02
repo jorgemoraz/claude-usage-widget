@@ -47,6 +47,17 @@ mkdir -p "$APP/Contents/MacOS"
 echo "Descargando versión ${SHA:0:7}…"
 curl -fsSL "https://raw.githubusercontent.com/${REPO}/${SHA}/main.swift" -o "$BUILD_DIR/main.swift"
 
+echo "Descargando personajes…"
+mkdir -p "$APP/Contents/Resources/sprites"
+for w in claude chatgpt soniox; do
+  for r in 0 1 2 3; do
+    for c in 0 1 2; do
+      curl -fsSL "https://raw.githubusercontent.com/${REPO}/${SHA}/sprites/$w-$r-$c.png" \
+        -o "$APP/Contents/Resources/sprites/$w-$r-$c.png" || true
+    done
+  done
+done
+
 echo "Compilando…"
 if ! xcrun swiftc -O "$BUILD_DIR/main.swift" -o "$APP/Contents/MacOS/$BIN"; then
   # Si falla, se apunta para no reintentar en bucle y se deja la versión anterior funcionando
