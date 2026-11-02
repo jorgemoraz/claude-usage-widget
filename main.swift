@@ -639,7 +639,15 @@ enum Secret {
          kSecAttrAccount as String: account]
     }
 
+    /// Copia en un archivo privado (solo legible por este usuario). Va por delante del Llavero:
+    /// al recompilarse la app, el Llavero puede negarse a sustituir una clave antigua sin avisar.
+    private static func file(_ account: String) -> URL { Updater.support.appendingPathComponent(".\(account).clave") }
+
     static func read(_ account: String) -> String? {
+        if let s = try? String(contentsOf: file(account), encoding: .utf8) {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
         var q = query(account)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -652,13 +660,23 @@ enum Secret {
     }
 
     static func save(_ value: String, _ account: String) {
-        delete(account)
-        var q = query(account)
-        q[kSecValueData as String] = Data(value.utf8)
-        SecItemAdd(q as CFDictionary, nil)
+        SecItemDelete(query(account) as CFDictionary)
+        let f = file(account)
+        try? FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: f.path, contents: Data(value.trimmingCharacters(in: .whitespacesAndNewlines).utf8),
+                                       attributes: [.posixPermissions: 0o600])
     }
 
-    static func delete(_ account: String) { SecItemDelete(query(account) as CFDictionary) }
+    static func delete(_ account: String) {
+        SecItemDelete(query(account) as CFDictionary)
+        try? FileManager.default.removeItem(at: file(account))
+    }
+
+    /// Para los mensajes de error: solo el principio, nunca la clave entera
+    static func hint(_ account: String) -> String {
+        guard let k = read(account) else { return "ninguna" }
+        return String(k.prefix(k.hasPrefix("snx_") ? 9 : 4)) + "…"
+    }
 }
 
 /// Número que puede venir como número o como texto ("12.40")
@@ -747,6 +765,9 @@ enum SonioxAPI {
                     w.budget = dnum(m["monthly_budget_usd"])
                 }
                 if w.available == nil && w.month == nil {
+                    if case .failure(APIError.http(_, 401)) = r1 {
+                        return done(.failure(APIError.http("Soniox (clave \(Secret.hint(account)))", 401)))
+                    }
                     if case .failure(let e) = r1 { return done(.failure(e)) }
                     return done(.failure(APIError.badData("Soniox")))
                 }
