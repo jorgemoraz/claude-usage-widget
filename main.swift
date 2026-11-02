@@ -2288,7 +2288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Clave de la API de Soniox"
         alert.informativeText = "Pega una clave de organización de Soniox (empieza por snx_org_; console.soniox.com › Settings › Organization API keys). Las claves de proyecto (snx_proj_) no dan acceso al saldo. Con ella el widget lee el saldo prepago y el gasto del mes. Se guarda solo en el Llavero de este Mac. Déjala vacía para borrarla."
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         alert.accessoryView = field
         alert.addButton(withTitle: "Guardar")
         alert.addButton(withTitle: "Cancelar")
@@ -2297,6 +2297,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.isEmpty { Secret.delete(SonioxAPI.account); model.soniox = nil } else { Secret.save(value, SonioxAPI.account) }
         model.refreshAPIs(force: true)
+        // Confirmación: qué se ha guardado (solo el principio y la longitud)
+        let ok = NSAlert()
+        ok.messageText = value.isEmpty ? "Clave de Soniox borrada" : "Clave de Soniox guardada"
+        ok.informativeText = value.isEmpty ? "" : "Empieza por \(Secret.hint(SonioxAPI.account)) y tiene \(value.count) caracteres." +
+            (value.hasPrefix("snx_org_") ? "" : "\n\nOjo: no empieza por snx_org_. Soniox solo da el saldo con una clave de organización.")
+        ok.runModal()
     }
 }
 
