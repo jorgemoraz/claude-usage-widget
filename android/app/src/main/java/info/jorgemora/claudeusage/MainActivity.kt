@@ -26,6 +26,7 @@ class MainActivity : Activity() {
     }
 
     private val scope = MainScope()
+    private var updating = false
     private lateinit var status: TextView
     private lateinit var list: LinearLayout
     private lateinit var openaiButton: Button
@@ -75,7 +76,7 @@ class MainActivity : Activity() {
         status = text("", 18f)
         root.addView(status)
         root.addView(text("Para añadir el widget: mantén pulsado el escritorio › Widgets › Uso de Claude. Hay dos: el grande y el de una fila; los dos se adaptan al tamaño (estíralos). Tócalo para actualizar; toca un personaje para abrir esta pantalla. Para elegir qué servicios muestra cada uno: mantén pulsado el widget › Configuración.", 13f, 0xFF8F8786.toInt()))
-        updateButton = button("Descargar la última versión") { openLatest() }
+        updateButton = button("Buscar actualización") { openLatest() }
         root.addView(updateButton)
 
         setContentView(ScrollView(this).apply {
@@ -89,6 +90,14 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         show()
+        SelfUpdate.status(this)?.let { updateButton.text = it }
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+        // Al abrir la app, si hay versión nueva y ya hay permiso, se instala sola
+        if (SelfUpdate.canInstall(this)) scope.launch {
+            val r = SelfUpdate.latest()
+            if (r != null && r.version > SelfUpdate.current(this@MainActivity)) openLatest()
+        }
         refresh()
     }
 
@@ -166,22 +175,24 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Pide a GitHub el enlace exacto de la última versión (cada versión tiene nombre propio, sin cachés) */
+    /** Busca, descarga e instala la última versión desde GitHub, sin pasar por el navegador */
     private fun openLatest() {
-        updateButton.text = "Buscando la última versión…"
+        if (!SelfUpdate.canInstall(this)) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Permiso para actualizarse")
+                .setMessage("Para que la app se actualice sola, Android pide permiso una vez: activa «Permitir de esta fuente» en la pantalla que se abre y vuelve aquí.")
+                .setPositiveButton("Abrir ajustes") { _, _ -> SelfUpdate.askPermission(this) }
+                .setNegativeButton("Ahora no", null).show()
+            return
+        }
+        if (updating) return
+        updating = true
+        updateButton.isEnabled = false
         scope.launch {
-            val info = withContext(Dispatchers.IO) {
-                runCatching {
-                    val conn = java.net.URL(RELEASE_API).openConnection() as java.net.HttpURLConnection
-                    conn.setRequestProperty("Accept", "application/vnd.github+json")
-                    conn.setRequestProperty("User-Agent", "UsoDeClaude-Android")
-                    val o = org.json.JSONObject(conn.inputStream.bufferedReader().readText())
-                    val asset = o.getJSONArray("assets").getJSONObject(0)
-                    Pair(o.optString("name"), asset.getString("browser_download_url"))
-                }.getOrNull()
-            }
-            updateButton.text = "Descargar la última versión"
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info?.second ?: RELEASE_PAGE)))
+            val msg = SelfUpdate.run(this@MainActivity, foreground = true) { t -> runOnUiThread { updateButton.text = t } }
+            updateButton.text = msg
+            updateButton.isEnabled = true
+            updating = false
         }
     }
 

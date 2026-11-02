@@ -15,6 +15,12 @@ import java.util.concurrent.TimeUnit
 class UsageWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         runCatching { Fetch.all(applicationContext) }
+        // Como mucho cada 6 horas: buscar versión nueva e instalarla (sin preguntar si Android lo permite)
+        val p = applicationContext.getSharedPreferences("update", Context.MODE_PRIVATE)
+        if (System.currentTimeMillis() - p.getLong("checked", 0) > 6 * 3600_000 && SelfUpdate.canInstall(applicationContext)) {
+            p.edit().putLong("checked", System.currentTimeMillis()).apply()
+            runCatching { SelfUpdate.run(applicationContext, foreground = false) }
+        }
         return Result.success()
     }
 }
