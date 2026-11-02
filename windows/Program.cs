@@ -1,4 +1,5 @@
-// Uso de Claude para Windows — ventana flotante con el uso de Claude y ChatGPT.
+// Uso de Claude para Windows — widgets flotantes con el uso de Claude y ChatGPT (suscripciones)
+// y el saldo de las APIs de OpenAI y Soniox, con personajes animados que cambian de humor.
 // Datos: sesión de Claude Code (%USERPROFILE%\.claude) o inicio de sesión en claude.ai dentro de la app;
 // ChatGPT: sesión de Codex (%USERPROFILE%\.codex) o inicio de sesión en chatgpt.com dentro de la app.
 
@@ -17,6 +18,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
@@ -32,14 +36,34 @@ namespace UsoDeClaude
 
     // ───────────────────────── Ajustes ─────────────────────────
 
+    public class PanelConfig
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
+        public List<string> Services { get; set; } = new() { "claude", "gpt", "openai", "soniox" };
+        public string Layout { get; set; } = "normal";
+        public double Zoom { get; set; } = 1;
+        public double X { get; set; } = double.NaN;
+        public double Y { get; set; } = double.NaN;
+        public bool OnTop { get; set; } = true;
+        public bool Hidden { get; set; }
+    }
+
     public class Settings
     {
+        static Settings current;
+        public static Settings Current => current ??= Load();
+
+        // De la versión anterior (una sola ventana): se usan para crear el primer widget
         public double X { get; set; } = double.NaN;
         public double Y { get; set; } = double.NaN;
         public double Zoom { get; set; } = 1;
         public bool ShowGpt { get; set; } = true;
         public bool Minimized { get; set; }
         public bool AutoStart { get; set; } = true;
+
+        public List<PanelConfig> Panels { get; set; }
+        public List<string> Tray { get; set; } = new() { "claude", "gpt" };
+        public bool OpenAISession { get; set; }
 
         public static string Dir => IOPath.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UsoDeClaude");
         static string FilePath => IOPath.Combine(Dir, "ajustes.json");
@@ -84,7 +108,9 @@ namespace UsoDeClaude
         public static double? Num(JsonElement e, string name)
         {
             if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(name, out var v)) return null;
-            return v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
+            if (v.ValueKind == JsonValueKind.Number) return v.GetDouble();
+            if (v.ValueKind == JsonValueKind.String && double.TryParse(v.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d)) return d;
+            return null;
         }
 
         public static string Str(JsonElement e, string name)
@@ -183,7 +209,8 @@ namespace UsoDeClaude
         {
             using var doc = JsonDocument.Parse(body);
             var rows = new List<Row>();
-            foreach (var (key, label, span) in new[] { ("five_hour", "Sesión (5 h)", 18000.0), ("seven_day", "Semana · todos los modelos", 604800.0) })
+            foreach (var (key, label, span) in new[] { ("five_hour", "Sesión (5 h)", 18000.0), ("seven_day", "Semana", 604800.0),
+                ("seven_day_opus", "Semana · Opus", 604800.0), ("seven_day_sonnet", "Semana · Sonnet", 604800.0) })
             {
                 if (!doc.RootElement.TryGetProperty(key, out var w) || w.ValueKind != JsonValueKind.Object) continue;
                 var u = Util.Num(w, "utilization");
@@ -412,110 +439,321 @@ namespace UsoDeClaude
         }
     }
 
-    // ───────────────────────── Estado de ánimo y mascota ─────────────────────────
+    // ───────────────────────── APIs de pago ─────────────────────────
 
-    public enum Mood { Feliz, Tranquilo, Preocupado, Panico, Agotado }
-
-    public static class Mascot
+    public record Wallet(double? Available, double? Used, double? Granted, double? Month, double? Budget, string Source)
     {
-        public static Mood From(double? p) => p == null ? Mood.Tranquilo : p >= 100 ? Mood.Agotado : p >= 90 ? Mood.Panico : p >= 70 ? Mood.Preocupado : p >= 40 ? Mood.Tranquilo : Mood.Feliz;
-
-        static readonly Dictionary<Mood, string[]> Phrases = new()
+        /// <summary>0–100: cuánto se ha consumido. Decide el humor del personaje.</summary>
+        public double? Level
         {
-            [Mood.Feliz] = new[] { "A tope de energía", "Pídeme lo que quieras", "Fresco como una lechuga" },
-            [Mood.Tranquilo] = new[] { "Vamos bien", "Ritmo de crucero", "Aún queda gasolina" },
-            [Mood.Preocupado] = new[] { "Ojo, que se acaba", "Dosifícame un poco", "Esto baja rápido" },
-            [Mood.Panico] = new[] { "¡Últimas gotas!", "¡Que me apago!", "Solo para lo importante" },
-            [Mood.Agotado] = new[] { "Fuera de combate", "Zzz… vuelvo pronto" },
+            get
+            {
+                if (Granted > 0 && Used != null) return Math.Clamp(100 * Used.Value / Granted.Value, 0, 100);
+                if (Available != null && Used != null && Available + Used > 0) return Math.Clamp(100 * Used.Value / (Available.Value + Used.Value), 0, 100);
+                if (Budget > 0 && Month != null) return Math.Clamp(100 * Month.Value / Budget.Value, 0, 100);
+                return null;
+            }
+        }
+    }
+
+    /// <summary>Claves guardadas cifradas para este usuario de Windows (DPAPI)</summary>
+    public static class Secret
+    {
+        static string F(string k) => IOPath.Combine(Settings.Dir, k + ".clave");
+        public static string Read(string k)
+        {
+            try { var s = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(F(k)), null, DataProtectionScope.CurrentUser)).Trim(); return s.Length > 0 ? s : null; }
+            catch { return null; }
+        }
+        public static void Save(string k, string v)
+        {
+            Directory.CreateDirectory(Settings.Dir);
+            File.WriteAllBytes(F(k), ProtectedData.Protect(Encoding.UTF8.GetBytes(v.Trim()), null, DataProtectionScope.CurrentUser));
+        }
+        public static void Delete(string k) { try { File.Delete(F(k)); } catch { } }
+    }
+
+    /// <summary>Soniox: saldo prepago y gasto del mes con su API oficial</summary>
+    public static class Soniox
+    {
+        public static async Task<(Wallet w, string err)> Fetch()
+        {
+            var k = Secret.Read("soniox");
+            if (k == null) return (null, "Falta la clave de Soniox: clic derecho › Clave de la API de Soniox…");
+            async Task<(int, string)> get(string p)
+            {
+                var req = new HttpRequestMessage(HttpMethod.Get, "https://api.soniox.com/v1/" + p);
+                req.Headers.Add("Authorization", "Bearer " + k);
+                var r = await Util.Http.SendAsync(req);
+                return ((int)r.StatusCode, await r.Content.ReadAsStringAsync());
+            }
+            try
+            {
+                var (bs, bb) = await get("organization/balance");
+                var (ms, mb) = await get("organization/usage/monthly");
+                double? a = null, u = null, m = null, b = null;
+                if (bs == 200) { using var d = JsonDocument.Parse(bb); a = Util.Num(d.RootElement, "available_balance_usd"); u = Util.Num(d.RootElement, "used_balance_usd"); }
+                if (ms == 200) { using var d = JsonDocument.Parse(mb); m = Util.Num(d.RootElement, "usage_usd"); b = Util.Num(d.RootElement, "monthly_budget_usd"); }
+                if (a == null && m == null) return (null, bs == 401 || bs == 403 ? "Soniox no acepta la clave" : $"Soniox respondió {bs}");
+                return (new Wallet(a, u, a != null && u != null ? a + u : null, m, b, "Soniox"), null);
+            }
+            catch { return (null, "Sin respuesta de Soniox"); }
+        }
+    }
+
+    /// <summary>OpenAI no da el saldo con una clave de API: se lee con la sesión de platform.openai.com (vía no oficial)</summary>
+    public static class OpenAI
+    {
+        public const string TokenJS = @"(function(){var t=null;[window.localStorage,window.sessionStorage].forEach(function(st){for(var i=0;i<st.length;i++){var v=st.getItem(st.key(i))||'';if(v.indexOf('access_token')<0)continue;try{var o=JSON.parse(v);var c=(o&&o.body&&o.body.access_token)||(o&&o.access_token);if(c)t=c;}catch(e){}}});return t||'';})()";
+
+        const string JS = @"
+            let tok = " + TokenJS + @";
+            if (!tok) {
+              try { const s = await fetch('/api/auth/session', {credentials: 'include'}); if (s.status === 200) { const j = await s.json(); tok = j.accessToken || null; } } catch (e) {}
+            }
+            if (!tok) return {status: 401, body: ''};
+            const h = {'Authorization': 'Bearer ' + tok};
+            let gs = 0, gb = '';
+            try { const g = await fetch('https://api.openai.com/dashboard/billing/credit_grants', {headers: h}); gs = g.status; gb = await g.text(); } catch (e) { gs = -1; }
+            const d = new Date();
+            const start = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-01';
+            const end = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+            let ub = '';
+            try { const u = await fetch('https://api.openai.com/dashboard/billing/usage?start_date=' + start + '&end_date=' + end, {headers: h}); if (u.status === 200) ub = await u.text(); } catch (e) {}
+            return {status: gs, body: JSON.stringify({grants: gb, usage: ub})};";
+
+        public static async Task<(Wallet w, string err)> Fetch()
+        {
+            if (!Settings.Current.OpenAISession) return (null, "Inicia sesión en OpenAI: clic derecho › Iniciar sesión en OpenAI…");
+            var r = await Web.Run("https://platform.openai.com/", JS);
+            if (r == null) return (null, "Sin respuesta de OpenAI");
+            var (st, body) = r.Value;
+            double? a = null, u = null, g = null, m = null;
+            try
+            {
+                using var d = JsonDocument.Parse(string.IsNullOrEmpty(body) ? "{}" : body);
+                var gb = Util.Str(d.RootElement, "grants");
+                if (st == 200 && !string.IsNullOrEmpty(gb))
+                {
+                    using var gd = JsonDocument.Parse(gb);
+                    g = Util.Num(gd.RootElement, "total_granted"); u = Util.Num(gd.RootElement, "total_used");
+                    a = Util.Num(gd.RootElement, "total_available") ?? Util.Num(gd.RootElement, "total_paid_available");
+                }
+                var ub = Util.Str(d.RootElement, "usage");
+                if (!string.IsNullOrEmpty(ub)) { using var ud = JsonDocument.Parse(ub); var c = Util.Num(ud.RootElement, "total_usage"); if (c != null) m = c / 100; }
+            }
+            catch { }
+            if (a == null && m == null)
+                return (null, st == 401 || st == 403 ? "Sesión de OpenAI caducada: vuelve a iniciar sesión" : $"OpenAI respondió {st}");
+            return (new Wallet(a, u, g, m, null, "OpenAI"), null);
+        }
+    }
+
+    // ───────────────────────── Servicios, datos y tarjetas ─────────────────────────
+
+    public enum Svc { Claude, ChatGPT, OpenAI, Soniox }
+
+    public static class SvcInfo
+    {
+        public static readonly Svc[] All = { Svc.Claude, Svc.ChatGPT, Svc.OpenAI, Svc.Soniox };
+        public static string Key(Svc s) => s switch { Svc.Claude => "claude", Svc.ChatGPT => "gpt", Svc.OpenAI => "openai", _ => "soniox" };
+        public static Svc? From(string k) => All.Cast<Svc?>().FirstOrDefault(s => Key(s.Value) == k);
+        public static string Title(Svc s) => s switch { Svc.Claude => "Claude", Svc.ChatGPT => "ChatGPT", Svc.OpenAI => "API OpenAI", _ => "API Soniox" };
+        public static string Short(Svc s) => s switch { Svc.Claude => "Claude", Svc.ChatGPT => "GPT", Svc.OpenAI => "OpenAI", _ => "Soniox" };
+        public static string Sprite(Svc s) => s switch { Svc.Claude => "claude", Svc.Soniox => "soniox", _ => "chatgpt" };
+        public static bool IsAPI(Svc s) => s == Svc.OpenAI || s == Svc.Soniox;
+        public static Color Color(Svc s) => s switch
+        {
+            Svc.Claude => System.Windows.Media.Color.FromRgb(0xE3, 0x87, 0x6A),
+            Svc.ChatGPT => System.Windows.Media.Color.FromRgb(0x4D, 0xC7, 0x9E),
+            Svc.OpenAI => System.Windows.Media.Color.FromRgb(0x7F, 0xD6, 0xB8),
+            _ => System.Windows.Media.Color.FromRgb(0x6F, 0xA8, 0xFF)
         };
+    }
 
-        public static string Phrase(Mood m) { var l = Phrases[m]; return l[(int)(DateTimeOffset.Now.ToUnixTimeSeconds() / 90 % l.Length)]; }
+    public record Line(string Label, string Value, double? Percent, string Note, Color Color);
 
-        static string Ell(double cx, double cy, double rx, double ry) =>
-            FormattableString.Invariant($"M{cx - rx},{cy} a{rx},{ry} 0 1 0 {2 * rx},0 a{rx},{ry} 0 1 0 {-2 * rx},0");
+    public class Card
+    {
+        public Svc S;
+        public bool HasData;
+        public double? Level;
+        public string Big = "–", Small = "sin datos", Error;
+        public List<Line> Lines = new();
+        public int Row => Sprites.Row(Level);
 
-        const string Body = "M14,12 h20 a10,10 0 0 1 10,10 v14 a10,10 0 0 1 -10,10 h-20 a10,10 0 0 1 -10,-10 v-14 a10,10 0 0 1 10,-10 z";
-
-        static WPath Fill(string d, Color c) => new WPath { Data = Geometry.Parse(d), Fill = new SolidColorBrush(c) };
-        static WPath Stroke(string d, Color c, double w = 1.8) => new WPath
-        { Data = Geometry.Parse(d), Stroke = new SolidColorBrush(c), StrokeThickness = w, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round };
-
-        static Color C(uint argb) => Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
-
-        /// <summary>Dibuja la mascota (personaje original) en un lienzo de 48×48.</summary>
-        public static Canvas Draw(Mood mood, Color accent)
+        public string Phrase()
         {
-            var cv = new Canvas { Width = 48, Height = 48 };
-            var ink = C(0xFF291A17);
-            var tired = mood == Mood.Agotado;
-            var body = tired ? C(0xFF9C908D) : C(0xFFE0896A);
-            void add(UIElement e) => cv.Children.Add(e);
-            add(Stroke("M24,12 Q21.5,8 24,4.5", body, 1.6));
-            add(Fill(Ell(24, 4.5, 2.6, 2.6), tired ? Colors.Gray : accent));
-            add(Fill(Body, body));
-            add(Fill(Ell(15, 17, 3.5, 2), C(0x38FFFFFF)));
-            void eyes()
+            if (!HasData) return SvcInfo.IsAPI(S) ? "Sin datos de la API" : "Sin datos todavía";
+            var l = SvcInfo.IsAPI(S)
+                ? new[] { new[] { "Cartera sana", "Hay saldo de sobra", "Gasta tranquilo" }, new[] { "Ojo con el gasto", "Gasta con cabeza" }, new[] { "Recarga pronto", "El saldo baja rápido" }, new[] { "¡Recarga ya!", "¡Me quedo sin saldo!" } }[Row]
+                : new[] { new[] { "A tope de energía", "Ritmo de crucero", "Pídeme lo que quieras" }, new[] { "Ojo, que baja", "Dosifícame un poco" }, new[] { "Esto se acaba", "Solo lo importante" }, new[] { "¡Últimas gotas!", "¡Que me apago!" } }[Row];
+            return l[(int)(DateTimeOffset.Now.ToUnixTimeSeconds() / 90 % l.Length)];
+        }
+    }
+
+    public static class Data
+    {
+        public static List<Row> Claude = new(), Gpt = new();
+        public static string ClaudeErr, GptErr, OpenAIErr, SonioxErr;
+        public static Wallet OpenAIW, SonioxW;
+        public static DateTimeOffset? Updated;
+        public static bool Loading, NeedClaudeLogin, Sample;
+        static DateTimeOffset lastApis = DateTimeOffset.MinValue;
+        public static event Action Changed;
+        public static void Notify() => Changed?.Invoke();
+
+        static readonly System.Globalization.CultureInfo Es = new("es-ES");
+        public static string Pct(double p) => $"{Math.Round(p)} %";
+        public static string Dollars(double v) => v.ToString(v >= 100 ? "N0" : "N2", Es) + " $";
+
+        public static async Task Refresh(bool force = false)
+        {
+            if (Loading || Sample) return;
+            Loading = true; Notify();
+            try
             {
-                add(Fill(Ell(18, 26, 2.2, 2.8), ink)); add(Fill(Ell(30, 26, 2.2, 2.8), ink));
-                add(Fill(Ell(18.8, 25, 0.8, 0.8), Colors.White)); add(Fill(Ell(30.8, 25, 0.8, 0.8), Colors.White));
+                var c = await global::UsoDeClaude.Claude.Fetch();
+                if (c.rows != null) { Claude = c.rows; ClaudeErr = null; } else ClaudeErr = c.error;
+                NeedClaudeLogin = c.rows == null && c.needLogin;
+                var g = await global::UsoDeClaude.Gpt.Fetch();
+                if (g.rows != null) { Gpt = g.rows; GptErr = null; } else GptErr = g.error;
+                // Las APIs cambian despacio: cada 10 minutos, o al pedirlo a mano
+                if (force || DateTimeOffset.Now - lastApis > TimeSpan.FromMinutes(10))
+                {
+                    lastApis = DateTimeOffset.Now;
+                    var s = await Soniox.Fetch();
+                    if (s.w != null) { SonioxW = s.w; SonioxErr = null; } else SonioxErr = s.err;
+                    var o = await global::UsoDeClaude.OpenAI.Fetch();
+                    if (o.w != null) { OpenAIW = o.w; OpenAIErr = null; } else OpenAIErr = o.err;
+                }
+                Updated = DateTimeOffset.Now;
             }
-            void cheeks() { add(Fill(Ell(12.5, 31, 2.2, 1.4), C(0x73FF8FA3))); add(Fill(Ell(35.5, 31, 2.2, 1.4), C(0x73FF8FA3))); }
-            void drop(double x) => add(Fill(FormattableString.Invariant($"M{x},15 C{x + 2.2},18 {x + 2.6},20.5 {x},21.5 C{x - 2.6},20.5 {x - 2.2},18 {x},15 Z"), C(0xFF8FCCFF)));
-            switch (mood)
-            {
-                case Mood.Feliz: eyes(); cheeks(); add(Fill("M19,32 Q24,39.5 29,32 Z", ink)); break;
-                case Mood.Tranquilo: eyes(); cheeks(); add(Stroke("M21,33 Q24,35.8 27,33", ink)); break;
-                case Mood.Preocupado:
-                    eyes(); add(Stroke("M14.5,21.5 L21,20 M27,20 L33.5,21.5", ink));
-                    add(Stroke("M19,35 Q21.5,32.5 24,35 Q26.5,37.5 29,35", ink)); drop(40); break;
-                case Mood.Panico:
-                    add(Fill(Ell(18, 26, 3.6, 3.6), Colors.White)); add(Fill(Ell(30, 26, 3.6, 3.6), Colors.White));
-                    add(Fill(Ell(18, 26, 1.4, 1.4), ink)); add(Fill(Ell(30, 26, 1.4, 1.4), ink));
-                    add(Stroke("M14,19.5 L21,18.5 M27,18.5 L34,19.5", ink)); add(Fill(Ell(24, 36, 2.6, 3.2), ink));
-                    drop(40); drop(8); break;
-                case Mood.Agotado:
-                    add(Stroke("M15.5,26 Q18,28.6 20.5,26 M27.5,26 Q30,28.6 32.5,26", ink));
-                    add(Stroke(Ell(24, 35, 1.8, 1.8), ink, 1.4)); add(Stroke("M37,5 h4.5 l-4.5,5 h4.5", Colors.White, 1.4)); break;
-            }
-            return cv;
+            finally { Loading = false; Notify(); }
         }
 
-        /// <summary>Icono de la bandeja: carita con el porcentaje de la sesión.</summary>
-        public static System.Drawing.Icon TrayIcon(double? percent)
+        public static Card Card(Svc s) => SvcInfo.IsAPI(s)
+            ? Api(s, s == Svc.OpenAI ? OpenAIW : SonioxW, s == Svc.OpenAI ? OpenAIErr : SonioxErr)
+            : Sub(s, s == Svc.Claude ? Claude : Gpt, s == Svc.Claude ? ClaudeErr : GptErr);
+
+        static Card Sub(Svc s, List<Row> rows, string err)
+        {
+            var c = new Card { S = s, Error = err };
+            if (rows.Count == 0) return c;
+            c.HasData = true;
+            var session = rows.FirstOrDefault(r => !r.IsWeek);
+            var week = rows.FirstOrDefault(r => r.IsWeek);
+            c.Level = rows.Max(r => r.Percent);
+            c.Big = week != null ? Pct(week.Percent) : session != null ? Pct(session.Percent) : "–";
+            c.Small = session != null ? "5h " + Pct(session.Percent) : "";
+            foreach (var r in rows)
+            {
+                var note = r.ResetAt == null ? "" : r.ResetAt > DateTimeOffset.Now ? "vuelve " + Util.HourText(r.ResetAt.Value) : "reiniciado";
+                var label = !r.IsWeek ? "5 horas" : r.Label.Contains("· ") ? r.Label[(r.Label.IndexOf("· ") + 2)..] : r.Label;
+                c.Lines.Add(new Line(label, Pct(r.Percent), r.Percent, note, Util.UsageColor(r.Percent)));
+            }
+            return c;
+        }
+
+        static Card Api(Svc s, Wallet w, string err)
+        {
+            var c = new Card { S = s, Error = err };
+            if (w == null) return c;
+            c.HasData = true;
+            c.Level = w.Level;
+            var dim = System.Windows.Media.Color.FromArgb(140, 255, 255, 255);
+            if (w.Available != null)
+                c.Lines.Add(new Line("Saldo", Dollars(w.Available.Value), c.Level != null ? 100 - c.Level : null,
+                    "queda" + (w.Granted != null ? " de " + Dollars(w.Granted.Value) : ""), c.Level != null ? Util.UsageColor(c.Level.Value) : System.Windows.Media.Color.FromRgb(0x5C, 0xCC, 0x80)));
+            if (w.Used != null && w.Available != null) c.Lines.Add(new Line("Gastado", Dollars(w.Used.Value), null, "del saldo cargado", dim));
+            if (w.Month != null)
+                c.Lines.Add(new Line("Este mes", Dollars(w.Month.Value), w.Budget > 0 ? 100 * w.Month / w.Budget : null,
+                    "gastado" + (w.Budget != null ? " de " + Dollars(w.Budget.Value) : ""), dim));
+            c.Big = w.Available != null ? Dollars(w.Available.Value) : w.Month != null ? Dollars(w.Month.Value) : "–";
+            c.Small = w.Available != null ? (w.Month != null ? "mes " + Dollars(w.Month.Value) : "saldo") : "este mes";
+            return c;
+        }
+
+        public static void LoadSample()
+        {
+            Sample = true;
+            var now = DateTimeOffset.Now;
+            Claude = new() { new Row("Sesión (5 h)", 34, now.AddHours(2), 18000), new Row("Semana", 61, now.AddDays(3), 604800), new Row("Semana · Sonnet", 12, now.AddDays(3), 604800) };
+            Gpt = new() { new Row("Sesión (5 h)", 8, now.AddHours(4), 18000), new Row("Semana", 92, now.AddDays(1), 604800) };
+            OpenAIW = new Wallet(7.4, 12.6, 20, 3.2, null, "OpenAI");
+            SonioxErr = "Falta la clave de Soniox: clic derecho › Clave de la API de Soniox…";
+            Updated = now;
+        }
+    }
+
+    // ───────────────────────── Personajes ─────────────────────────
+
+    /// <summary>36 fotogramas incrustados en el .exe: 3 personajes × 4 humores × 3 fotogramas</summary>
+    public static class Sprites
+    {
+        static readonly Dictionary<string, BitmapImage> cache = new();
+
+        public static int Row(double? l) => l == null ? 0 : l >= 90 ? 3 : l >= 75 ? 2 : l >= 50 ? 1 : 0;
+        public static int Interval(int row) => new[] { 650, 480, 320, 200 }[Math.Clamp(row, 0, 3)];
+
+        public static Stream Open(string who, int row, int f) =>
+            typeof(Sprites).Assembly.GetManifestResourceStream($"sprites.{who}-{row}-{f}.png");
+
+        public static BitmapImage Get(string who, int row, int f)
+        {
+            var k = $"{who}-{row}-{f}";
+            if (cache.TryGetValue(k, out var b)) return b;
+            using var s = Open(who, row, f);
+            if (s == null) return null;
+            b = new BitmapImage();
+            b.BeginInit(); b.StreamSource = s; b.CacheOption = BitmapCacheOption.OnLoad; b.EndInit(); b.Freeze();
+            cache[k] = b;
+            return b;
+        }
+
+        [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
+
+        /// <summary>Icono de la barra de tareas: el personaje con el dato encima</summary>
+        public static System.Drawing.Icon TrayIcon(Card c)
         {
             using var bmp = new System.Drawing.Bitmap(32, 32);
             using (var g = System.Drawing.Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
                 g.Clear(System.Drawing.Color.Transparent);
-                var c = percent == null ? System.Drawing.Color.FromArgb(0xE0, 0x89, 0x6A)
-                    : System.Drawing.Color.FromArgb(Util.UsageColor(percent.Value).R, Util.UsageColor(percent.Value).G, Util.UsageColor(percent.Value).B);
-                using var path = new System.Drawing.Drawing2D.GraphicsPath();
-                path.AddArc(1, 1, 12, 12, 180, 90); path.AddArc(19, 1, 12, 12, 270, 90);
-                path.AddArc(19, 19, 12, 12, 0, 90); path.AddArc(1, 19, 12, 12, 90, 90); path.CloseFigure();
-                using (var b = new System.Drawing.SolidBrush(c)) g.FillPath(b, path);
-                var text = percent == null ? "?" : Math.Min(99, (int)Math.Round(percent.Value)).ToString();
-                using var f = new System.Drawing.Font("Segoe UI", text.Length > 1 ? 15 : 18, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Pixel);
+                using (var s = Open(SvcInfo.Sprite(c.S), c.Row, 0))
+                    if (s != null) using (var img = System.Drawing.Image.FromStream(s)) g.DrawImage(img, 0, -2, 32, 32);
+                var text = !c.HasData ? "?" : SvcInfo.IsAPI(c.S)
+                    ? Math.Round(c.S == Svc.OpenAI ? Data.OpenAIW?.Available ?? Data.OpenAIW?.Month ?? 0 : Data.SonioxW?.Available ?? Data.SonioxW?.Month ?? 0).ToString()
+                    : Math.Min(99, (int)Math.Round(c.Level ?? 0)).ToString();
+                var col = c.Level != null ? Util.UsageColor(SvcInfo.IsAPI(c.S) ? c.Level.Value : c.Level.Value) : System.Windows.Media.Colors.White;
+                using var f = new System.Drawing.Font("Segoe UI", text.Length > 2 ? 10 : 13, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Pixel);
                 var sz = g.MeasureString(text, f);
-                g.DrawString(text, f, System.Drawing.Brushes.Black, (32 - sz.Width) / 2, (32 - sz.Height) / 2 + 1);
+                var w = Math.Max(16, sz.Width + 2);
+                using (var bg = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(225, 20, 18, 18)))
+                    g.FillRectangle(bg, 32 - w, 17, w, 15);
+                using var fg = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(col.R, col.G, col.B));
+                g.DrawString(text, f, fg, 32 - w + (w - sz.Width) / 2, 17 + (15 - sz.Height) / 2 + 0.5f);
             }
-            return System.Drawing.Icon.FromHandle(bmp.GetHicon());
+            var h = bmp.GetHicon();
+            var icon = (System.Drawing.Icon)System.Drawing.Icon.FromHandle(h).Clone();
+            DestroyIcon(h);
+            return icon;
         }
     }
 
-    // ───────────────────────── Ventana de inicio de sesión ─────────────────────────
+    // ───────────────────────── Ventanas auxiliares ─────────────────────────
 
     public class LoginWindow : Window
     {
-        readonly string url, cookieUrl, cookieName;
-        readonly Action onDone;
         readonly WebView2 web = new WebView2();
         DispatcherTimer poll;
 
-        public LoginWindow(string url, string cookieUrl, string cookieName, Action onDone)
+        /// <summary>done: comprueba si ya hay sesión (cookie o token en la web)</summary>
+        public LoginWindow(string url, Func<WebView2, Task<bool>> done, Action onDone)
         {
-            this.url = url; this.cookieUrl = cookieUrl; this.cookieName = cookieName; this.onDone = onDone;
             Title = "Inicia sesión · Uso de Claude";
             Width = 480; Height = 720; Topmost = true;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -531,8 +769,7 @@ namespace UsoDeClaude
                     {
                         var path = web.Source?.AbsolutePath ?? "";
                         if (path.StartsWith("/login") || path.StartsWith("/auth") || path.Contains("magic-link")) return;
-                        var cookies = await web.CoreWebView2.CookieManager.GetCookiesAsync(cookieUrl);
-                        if (cookies.Any(c => c.Name.Contains(cookieName))) { poll.Stop(); Close(); onDone(); }
+                        if (await done(web)) { poll.Stop(); Close(); onDone(); }
                     }
                     catch { }
                 };
@@ -540,321 +777,524 @@ namespace UsoDeClaude
             };
             Closed += (_, __) => poll?.Stop();
         }
+
+        public static Func<WebView2, Task<bool>> Cookie(string url, string name) => async w =>
+            (await w.CoreWebView2.CookieManager.GetCookiesAsync(url)).Any(c => c.Name.Contains(name));
+
+        public static async Task<bool> OpenAIToken(WebView2 w)
+        {
+            if (!(w.Source?.Host ?? "").Contains("platform.openai.com")) return false;
+            var raw = await w.CoreWebView2.ExecuteScriptAsync(OpenAI.TokenJS);
+            return (JsonSerializer.Deserialize<string>(raw) ?? "").Length > 20;
+        }
     }
 
-    // ───────────────────────── Ventana flotante ─────────────────────────
+    public class KeyWindow : Window
+    {
+        public KeyWindow(string title, string text, Action<string> save, Action clear)
+        {
+            Title = title; Width = 440; SizeToContent = SizeToContent.Height; Topmost = true;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen; ResizeMode = ResizeMode.NoResize;
+            var sp = new StackPanel { Margin = new Thickness(18) };
+            sp.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
+            var box = new PasswordBox { Height = 28 };
+            sp.Children.Add(box);
+            var bar = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
+            Button b(string t, Action a) { var x = new Button { Content = t, Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(8, 0, 0, 0) }; x.Click += (_, __) => a(); bar.Children.Add(x); return x; }
+            if (clear != null) b("Borrar la clave", () => { clear(); Close(); });
+            b("Cancelar", Close);
+            var ok = b("Guardar", () => { if (box.Password.Trim().Length >= 10) { save(box.Password); Close(); } else MessageBox.Show("Esa clave no parece válida."); });
+            ok.IsDefault = true;
+            sp.Children.Add(bar);
+            Content = sp;
+            Loaded += (_, __) => box.Focus();
+        }
+    }
+
+    // ───────────────────────── Widget flotante ─────────────────────────
 
     public class Widget : Window
     {
-        readonly Settings st = Settings.Load();
-        List<Row> claude = new(), gpt = new();
-        string claudeErr, gptErr;
-        bool loading, askedLogin;
-        DateTimeOffset? updated;
-        readonly ScaleTransform scale = new ScaleTransform(1, 1);
-        readonly TranslateTransform bob = new TranslateTransform();
-        System.Windows.Forms.NotifyIcon tray;
+        public readonly PanelConfig Cfg;
+        readonly ScaleTransform scale = new(1, 1);
+        readonly List<(Image img, string who, int row)> sprites = new();
+        readonly DateTime start = DateTime.Now;
         Border card;
-        double t;
+        StackPanel controls;
+        bool hover;
 
-        [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint mods, uint vk);
-        const int HOTKEY_ID = 0x5544;
-
-        public Widget()
+        public static readonly string[] Layouts = { "mini", "compacto", "vertical", "normal", "grande" };
+        public static string LayoutName(string l) => l switch
         {
+            "mini" => "Mínimo (una línea)", "compacto" => "Compacto (horizontal)", "vertical" => "Vertical",
+            "grande" => "Grande", _ => "Normal (tarjetas)"
+        };
+        static readonly double[] Steps = { 0.85, 1, 1.15, 1.3, 1.5, 1.75, 2 };
+
+        public List<Svc> Services => Cfg.Services.Select(SvcInfo.From).Where(s => s != null).Select(s => s.Value).DefaultIfEmpty(Svc.Claude).ToList();
+
+        public Widget(PanelConfig cfg)
+        {
+            Cfg = cfg;
             Title = "Uso de Claude";
             WindowStyle = WindowStyle.None;
             AllowsTransparency = true;
             Background = Brushes.Transparent;
-            Topmost = true;
             ShowInTaskbar = false;
             ResizeMode = ResizeMode.NoResize;
             SizeToContent = SizeToContent.WidthAndHeight;
-            scale.ScaleX = scale.ScaleY = st.Zoom;
+            Topmost = cfg.OnTop;
+            scale.ScaleX = scale.ScaleY = cfg.Zoom;
 
-            if (!double.IsNaN(st.X) && !double.IsNaN(st.Y) &&
-                st.X > SystemParameters.VirtualScreenLeft - 50 && st.X < SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 50 &&
-                st.Y > SystemParameters.VirtualScreenTop - 20 && st.Y < SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 50)
-            { Left = st.X; Top = st.Y; }
+            if (!double.IsNaN(cfg.X) && !double.IsNaN(cfg.Y) &&
+                cfg.X > SystemParameters.VirtualScreenLeft - 50 && cfg.X < SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 50 &&
+                cfg.Y > SystemParameters.VirtualScreenTop - 20 && cfg.Y < SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 50)
+            { Left = cfg.X; Top = cfg.Y; }
             else
-            { WindowStartupLocation = WindowStartupLocation.Manual; Left = SystemParameters.WorkArea.Right - 330; Top = SystemParameters.WorkArea.Top + 20; }
+            { WindowStartupLocation = WindowStartupLocation.Manual; Left = SystemParameters.WorkArea.Right - 400; Top = SystemParameters.WorkArea.Top + 20 + 40 * AppCtl.Panels.Count; }
 
-            MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) { try { DragMove(); } catch { } SavePos(); } };
-            ContextMenu = BuildMenu();
-            SetupTray();
-            Render();
-
-            SourceInitialized += (_, __) =>
+            // Arrastrar para mover; un clic sin mover actualiza
+            MouseLeftButtonDown += (_, e) =>
             {
-                var h = new WindowInteropHelper(this).Handle;
-                RegisterHotKey(h, HOTKEY_ID, 0x0001 | 0x0002 | 0x4000, 0x55); // Ctrl+Alt+U
-                HwndSource.FromHwnd(h).AddHook((IntPtr hw, int msg, IntPtr wp, IntPtr lp, ref bool handled) =>
-                {
-                    if (msg == 0x0312 && wp.ToInt32() == HOTKEY_ID) { ShowWidget(); handled = true; }
-                    return IntPtr.Zero;
-                });
+                if (e.ButtonState != MouseButtonState.Pressed) return;
+                double x = Left, y = Top;
+                try { DragMove(); } catch { }
+                if (Math.Abs(Left - x) < 2 && Math.Abs(Top - y) < 2) _ = Data.Refresh(force: true);
+                else SavePos();
             };
+            MouseEnter += (_, __) => { hover = true; if (controls != null) controls.Visibility = Visibility.Visible; };
+            MouseLeave += (_, __) => { hover = false; if (controls != null) controls.Visibility = Visibility.Collapsed; };
+            Data.Changed += OnData;
+            Closed += (_, __) => Data.Changed -= OnData;
 
-            var anim = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+            var anim = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
             anim.Tick += (_, __) => Animate();
             anim.Start();
-
-            var refresh = new DispatcherTimer { Interval = TimeSpan.FromMinutes(2) };
-            refresh.Tick += (_, __) => _ = Refresh();
-            refresh.Start();
-
-            var upd = new DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
-            upd.Tick += async (_, __) => { if (await Updater.CheckAndUpdate()) Quit(); };
-            upd.Start();
-
-            Loaded += async (_, __) =>
-            {
-                if (st.Minimized) Minimize();
-                await Refresh();
-                if (await Updater.CheckAndUpdate()) Quit();
-            };
+            Render();
         }
 
-        void SavePos() { st.X = Left; st.Y = Top; st.Save(); }
+        void OnData() => Dispatcher.Invoke(Render);
+
+        void SavePos() { Cfg.X = Left; Cfg.Y = Top; Settings.Current.Save(); }
 
         void Animate()
         {
-            t += 0.04;
-            var mood = Mascot.From(claude.Count > 0 ? claude.Max(r => r.Percent) : null);
-            switch (mood)
+            var ms = (DateTime.Now - start).TotalMilliseconds;
+            foreach (var (img, who, row) in sprites)
             {
-                case Mood.Feliz: bob.Y = -Math.Abs(Math.Sin(t * 2.6)) * 3; bob.X = 0; break;
-                case Mood.Panico: bob.X = Math.Sin(t * 38) * 1.2; bob.Y = Math.Sin(t * 29) * 0.6; break;
-                case Mood.Agotado: bob.Y = 1 + Math.Sin(t * 0.9) * 0.6; bob.X = 0; break;
-                default: bob.Y = Math.Sin(t * 1.8) * 1.2; bob.X = 0; break;
+                var f = (int)(ms / Sprites.Interval(row)) % 3;
+                var src = Sprites.Get(who, row, f);
+                if (!ReferenceEquals(img.Source, src)) img.Source = src;
             }
         }
 
-        // ── Datos ──
-
-        async Task Refresh()
-        {
-            if (loading) return;
-            loading = true; Render();
-            var c = await Claude.Fetch();
-            if (c.rows != null) { claude = c.rows; claudeErr = null; } else claudeErr = c.error;
-            if (st.ShowGpt)
-            {
-                var g = await Gpt.Fetch();
-                if (g.rows != null) { gpt = g.rows; gptErr = null; } else gptErr = g.error;
-            }
-            updated = DateTimeOffset.Now;
-            loading = false;
-            Render();
-            UpdateTray();
-            if (claude.Count == 0 && c.needLogin && !askedLogin) { askedLogin = true; LoginClaude(); }
-        }
-
-        void LoginClaude() => new LoginWindow("https://claude.ai/login", "https://claude.ai", "sessionKey", () => _ = Refresh()).Show();
-        void LoginGpt() => new LoginWindow("https://chatgpt.com/auth/login", "https://chatgpt.com", "session-token", () => _ = Refresh()).Show();
-
-        // ── Interfaz ──
+        // ── Piezas ──
 
         static TextBlock Txt(string s, double size, Color c, FontWeight? w = null) =>
-            new TextBlock { Text = s, FontSize = size, Foreground = new SolidColorBrush(c), FontWeight = w ?? FontWeights.Normal, FontFamily = new FontFamily("Segoe UI Variable Display, Segoe UI") };
-
-        static readonly Color White = Colors.White;
+            new TextBlock { Text = s, FontSize = size, Foreground = new SolidColorBrush(c), FontWeight = w ?? FontWeights.Normal, FontFamily = new FontFamily("Segoe UI Variable Display, Segoe UI"), TextTrimming = TextTrimming.CharacterEllipsis };
         static Color Wa(byte a) => Color.FromArgb(a, 255, 255, 255);
+        static readonly Color Warn = Color.FromRgb(255, 180, 100);
 
-        UIElement Bar(double p, Color c)
+        Image Sprite(Card c, double size)
         {
-            var g = new Grid { Height = 7, Margin = new Thickness(0, 4, 0, 0) };
+            var who = SvcInfo.Sprite(c.S);
+            var img = new Image { Width = size, Height = size, Source = Sprites.Get(who, c.Row, 0), Cursor = Cursors.Hand, ToolTip = SvcInfo.Title(c.S) + " · " + c.Phrase() };
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+            sprites.Add((img, who, c.Row));
+            return img;
+        }
+
+        static Color BigColor(Card c) => !c.HasData ? Wa(140) : c.Level != null ? Util.UsageColor(c.Level.Value) : Colors.White;
+
+        static UIElement Bar(double p, Color c)
+        {
+            var g = new Grid { Height = 7, VerticalAlignment = VerticalAlignment.Center };
             g.Children.Add(new Border { CornerRadius = new CornerRadius(4), Background = new SolidColorBrush(Wa(26)) });
-            var fill = new Border
-            {
-                CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Left,
-                Background = new LinearGradientBrush(Color.FromArgb(170, c.R, c.G, c.B), c, 0)
-            };
-            g.SizeChanged += (_, e) => fill.Width = Math.Max(p > 0 ? 7 : 0, e.NewSize.Width * Math.Min(p, 100) / 100);
+            var fill = new Border { CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Left, Background = new LinearGradientBrush(Color.FromArgb(170, c.R, c.G, c.B), c, 0) };
+            g.SizeChanged += (_, e) => fill.Width = Math.Max(p > 0 ? 7 : 0, e.NewSize.Width * Math.Clamp(p, 0, 100) / 100);
             g.Children.Add(fill);
             return g;
         }
 
-        UIElement RowView(Row r)
+        /// <summary>Celda compacta: personaje, nombre, dato grande y otro pequeño</summary>
+        UIElement Cell(Card c, double sprite, double big)
         {
-            var sp = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
-            var head = new DockPanel();
-            var pct = Txt($"{Math.Round(r.Percent)} %", 18, Util.UsageColor(r.Percent), FontWeights.SemiBold);
-            DockPanel.SetDock(pct, Dock.Right);
-            head.Children.Add(pct);
-            head.Children.Add(Txt(r.Label, 12, Wa(190), FontWeights.Medium));
-            sp.Children.Add(head);
-            sp.Children.Add(Bar(r.Percent, Util.UsageColor(r.Percent)));
-            if (r.ResetAt != null) sp.Children.Add(Txt(Util.ResetText(r.ResetAt.Value), 10.5, Wa(128)));
+            var sp = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4, 2, 10, 2) };
+            sp.Children.Add(Sprite(c, sprite));
+            var col = new StackPanel { Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, MaxWidth = 150 };
+            col.Children.Add(Txt(SvcInfo.IsAPI(c.S) || !c.HasData ? SvcInfo.Short(c.S) : SvcInfo.Short(c.S) + " · semana", 11, SvcInfo.Color(c.S), FontWeights.Bold));
+            col.Children.Add(Txt(c.Big, big, BigColor(c), FontWeights.Bold));
+            col.Children.Add(Txt(!c.HasData ? (c.Error ?? "sin datos") : c.Small, 11, !c.HasData && c.Error != null ? Warn : Wa(150)));
+            sp.Children.Add(col);
             return sp;
+        }
+
+        /// <summary>Tarjeta completa con frase y líneas con barra</summary>
+        UIElement Full(Card c, bool large)
+        {
+            var g = new DockPanel { Margin = new Thickness(0, 6, 0, 6) };
+            var spr = Sprite(c, large ? 72 : 58);
+            spr.VerticalAlignment = VerticalAlignment.Top;
+            DockPanel.SetDock(spr, Dock.Left);
+            g.Children.Add(spr);
+            var col = new StackPanel { Margin = new Thickness(12, 0, 0, 0) };
+            var head = new DockPanel();
+            var phrase = Txt(c.HasData ? c.Phrase() : "", 11, Wa(150));
+            phrase.VerticalAlignment = VerticalAlignment.Bottom; phrase.Margin = new Thickness(8, 0, 0, 1);
+            DockPanel.SetDock(phrase, Dock.Right);
+            head.Children.Add(phrase);
+            head.Children.Add(Txt(SvcInfo.Title(c.S), 15, SvcInfo.Color(c.S), FontWeights.Bold));
+            col.Children.Add(head);
+            foreach (var l in c.Lines)
+            {
+                var row = new Grid { Margin = new Thickness(0, 3, 0, 0) };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(70) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(large ? 86 : 74) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 50 });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(large ? 130 : 108) });
+                var lab = Txt(l.Label, 12, Wa(185), FontWeights.Medium); lab.VerticalAlignment = VerticalAlignment.Center;
+                var val = Txt(l.Value, large ? 21 : 18, l.Percent != null ? l.Color : Colors.White, FontWeights.Bold);
+                var note = Txt(l.Note, 10.5, Wa(130)); note.VerticalAlignment = VerticalAlignment.Center; note.HorizontalAlignment = HorizontalAlignment.Right;
+                Grid.SetColumn(val, 1); Grid.SetColumn(note, 3);
+                row.Children.Add(lab); row.Children.Add(val); row.Children.Add(note);
+                if (l.Percent != null) { var b = Bar(l.Percent.Value, l.Color); Grid.SetColumn(b, 2); ((FrameworkElement)b).Margin = new Thickness(4, 0, 10, 0); row.Children.Add(b); }
+                col.Children.Add(row);
+            }
+            if (!c.HasData || c.Error != null)
+            {
+                var e = Txt(c.HasData ? "⚠ " + c.Error : c.Error ?? "Sin datos todavía", 11, Warn);
+                e.TextWrapping = TextWrapping.Wrap; e.TextTrimming = TextTrimming.None; e.Margin = new Thickness(0, 3, 0, 0);
+                col.Children.Add(e);
+            }
+            g.Children.Add(col);
+            return g;
         }
 
         Button Ctl(string glyph, string tip, Action a)
         {
-            var b = new Button
-            {
-                Content = Txt(glyph, 10, White, FontWeights.Bold), Width = 20, Height = 20, Margin = new Thickness(3, 0, 0, 0),
-                ToolTip = tip, Cursor = Cursors.Hand, Focusable = false
-            };
+            var b = new Button { Content = Txt(glyph, 11, Colors.White, FontWeights.Bold), Width = 22, Height = 22, Margin = new Thickness(3, 0, 0, 0), ToolTip = tip, Cursor = Cursors.Hand, Focusable = false };
             b.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(
                 "<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' TargetType='Button'>" +
-                "<Border CornerRadius='10' Background='#24FFFFFF' BorderBrush='#40FFFFFF' BorderThickness='0.5'>" +
+                "<Border CornerRadius='11' Background='#3A000000' BorderBrush='#50FFFFFF' BorderThickness='0.5'>" +
                 "<ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center'/></Border></ControlTemplate>");
             b.Click += (_, __) => a();
             return b;
         }
 
-        void Render()
+        public void Render()
         {
-            var worst = claude.Count > 0 ? claude.Max(r => r.Percent) : (double?)null;
-            var mood = Mascot.From(worst);
-            var session = claude.FirstOrDefault(r => !r.IsWeek);
-
-            var root = new StackPanel { Width = 300, Margin = new Thickness(16) };
-
-            // Cabecera: mascota + frase + número grande
-            var head = new DockPanel();
-            var mascot = new Viewbox { Width = 68, Height = 68, Child = Mascot.Draw(mood, Util.UsageColor(worst ?? 0)), RenderTransform = bob, Cursor = Cursors.Hand, ToolTip = "Actualizar" };
-            mascot.MouseLeftButtonDown += (_, e) => { e.Handled = true; _ = Refresh(); };
-            DockPanel.SetDock(mascot, Dock.Left);
-            head.Children.Add(mascot);
-            var info = new StackPanel { Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-            var top = new DockPanel();
-            var ctl = new StackPanel { Orientation = Orientation.Horizontal };
-            ctl.Children.Add(Ctl("−", "Más pequeño", () => SetZoom(-1)));
-            ctl.Children.Add(Ctl("+", "Más grande", () => SetZoom(1)));
-            ctl.Children.Add(Ctl("⌄", "Minimizar a la bandeja (Ctrl+Alt+U para volver)", Minimize));
-            DockPanel.SetDock(ctl, Dock.Right);
-            top.Children.Add(ctl);
-            top.Children.Add(Txt("USO DE CLAUDE", 10, Wa(115), FontWeights.Bold));
-            info.Children.Add(top);
-            info.Children.Add(Txt(claude.Count == 0 ? "Conectando…" : Mascot.Phrase(mood), 14, Wa(242), FontWeights.SemiBold));
-            if (session != null)
+            sprites.Clear();
+            var cards = Services.Select(Data.Card).ToList();
+            var lay = Cfg.Layout;
+            FrameworkElement body;
+            switch (lay)
             {
-                var big = new StackPanel { Orientation = Orientation.Horizontal };
-                big.Children.Add(Txt($"{Math.Round(session.Percent)}", 36, Util.UsageColor(session.Percent), FontWeights.Bold));
-                var lbl = Txt(" % de la sesión", 11, Wa(140), FontWeights.Medium); lbl.VerticalAlignment = VerticalAlignment.Bottom; lbl.Margin = new Thickness(2, 0, 0, 8);
-                big.Children.Add(lbl);
-                info.Children.Add(big);
-            }
-            head.Children.Add(info);
-            root.Children.Add(head);
-
-            if (claude.Count == 0) root.Children.Add(Txt(claudeErr ?? "Cargando…", 12, Wa(180)));
-            foreach (var r in claude) root.Children.Add(RowView(r));
-            if (claude.Count > 0 && claudeErr != null) root.Children.Add(Txt("⚠ " + claudeErr, 11, Color.FromRgb(255, 180, 100)));
-
-            if (st.ShowGpt && (gpt.Count > 0 || gptErr != null))
-            {
-                var sec = Txt("CHATGPT", 10, Wa(115), FontWeights.Bold); sec.Margin = new Thickness(0, 14, 0, 0);
-                root.Children.Add(sec);
-                if (gpt.Count == 0) root.Children.Add(Txt(gptErr, 12, Wa(160)));
-                foreach (var r in gpt) root.Children.Add(RowView(r));
+                case "mini":
+                    {
+                        var sp = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 4, 8, 4) };
+                        foreach (var c in cards)
+                        {
+                            var it = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 10, 0), ToolTip = SvcInfo.Title(c.S) + ": " + c.Big + (c.HasData ? " · " + c.Small : "") };
+                            it.Children.Add(Sprite(c, 30));
+                            var t = Txt(c.Big, 17, BigColor(c), FontWeights.Bold); t.VerticalAlignment = VerticalAlignment.Center; t.Margin = new Thickness(4, 0, 0, 0);
+                            it.Children.Add(t);
+                            sp.Children.Add(it);
+                        }
+                        body = sp; break;
+                    }
+                case "compacto":
+                    {
+                        var sp = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(10, 8, 6, 8) };
+                        foreach (var c in cards) sp.Children.Add(Cell(c, 46, 24));
+                        body = sp; break;
+                    }
+                case "vertical":
+                    {
+                        var sp = new StackPanel { Margin = new Thickness(10, 10, 10, 6), Width = 200 };
+                        foreach (var c in cards) { var e = (FrameworkElement)Cell(c, 50, 24); e.Margin = new Thickness(0, 3, 0, 3); sp.Children.Add(e); }
+                        sp.Children.Add(Footer());
+                        body = sp; break;
+                    }
+                default:
+                    {
+                        var large = lay == "grande";
+                        var sp = new StackPanel { Margin = new Thickness(16, 12, 16, 10), Width = large ? 440 : 380 };
+                        foreach (var c in cards) sp.Children.Add(Full(c, large));
+                        sp.Children.Add(Footer());
+                        body = sp; break;
+                    }
             }
 
-            var foot = Txt(loading ? "actualizando…" : updated != null ? $"Actualizado {Util.HourText(updated.Value)} · toca la mascota para actualizar" : "", 10, Wa(100));
-            foot.HorizontalAlignment = HorizontalAlignment.Right; foot.Margin = new Thickness(0, 10, 0, 0);
-            root.Children.Add(foot);
+            controls = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 6, 8, 0), Visibility = hover ? Visibility.Visible : Visibility.Collapsed };
+            controls.Children.Add(Ctl("⟳", "Actualizar", () => _ = Data.Refresh(force: true)));
+            controls.Children.Add(Ctl("−", "Más pequeño", () => SetZoom(-1)));
+            controls.Children.Add(Ctl("+", "Más grande", () => SetZoom(1)));
+            controls.Children.Add(Ctl("⌄", "Ocultar (Ctrl+Alt+U o el icono de la barra de tareas para volver)", HidePanel));
+            var grid = new Grid();
+            grid.Children.Add(body);
+            grid.Children.Add(controls);
 
-            var tint = Mascot.From(worst) switch
-            {
-                Mood.Feliz => Color.FromRgb(0x5C, 0xCC, 0x80),
-                Mood.Preocupado => Color.FromRgb(0xFF, 0xAD, 0x42),
-                Mood.Panico => Color.FromRgb(0xFF, 0x61, 0x59),
-                Mood.Agotado => Color.FromRgb(0x8C, 0x8C, 0x9E),
-                _ => Color.FromRgb(0x73, 0xB3, 0xF2)
-            };
+            var worst = cards.Where(c => c.Level != null).Select(c => c.Level.Value).DefaultIfEmpty(0).Max();
+            var tint = Util.UsageColor(worst);
             var bg = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0, 1) };
-            bg.GradientStops.Add(new GradientStop(Color.FromArgb(240, (byte)(0x1C + tint.R / 12), (byte)(0x18 + tint.G / 12), (byte)(0x17 + tint.B / 12)), 0));
-            bg.GradientStops.Add(new GradientStop(Color.FromArgb(240, 0x1C, 0x18, 0x17), 0.55));
-
+            bg.GradientStops.Add(new GradientStop(Color.FromArgb(242, (byte)(0x1C + tint.R / 14), (byte)(0x18 + tint.G / 14), (byte)(0x17 + tint.B / 14)), 0));
+            bg.GradientStops.Add(new GradientStop(Color.FromArgb(242, 0x1C, 0x18, 0x17), 0.6));
             card = new Border
             {
-                CornerRadius = new CornerRadius(22), Background = bg, Child = root, Margin = new Thickness(10),
-                BorderThickness = new Thickness(1),
-                BorderBrush = new LinearGradientBrush(Wa(110), Wa(30), 90),
+                CornerRadius = new CornerRadius(lay == "mini" ? 18 : 22), Background = bg, Child = grid, Margin = new Thickness(10),
+                BorderThickness = new Thickness(1), BorderBrush = new LinearGradientBrush(Wa(110), Wa(30), 90),
                 LayoutTransform = scale,
                 Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 18, ShadowDepth = 3, Opacity = 0.45 }
             };
             Content = card;
+            ContextMenu = BuildMenu();
+            Animate();
         }
 
-        static readonly double[] Steps = { 0.85, 1, 1.15, 1.3, 1.5, 1.75, 2 };
+        static UIElement Footer()
+        {
+            var t = Txt(Data.Loading ? "actualizando…" : Data.Updated != null ? $"Actualizado {Util.HourText(Data.Updated.Value)} · clic para actualizar" : "", 10, Wa(100));
+            t.HorizontalAlignment = HorizontalAlignment.Right; t.Margin = new Thickness(0, 6, 0, 0);
+            return t;
+        }
+
+        public FrameworkElement CardElement => card;
 
         void SetZoom(int dir)
         {
-            var z = st.Zoom;
+            var z = Cfg.Zoom;
             var next = dir > 0 ? Steps.FirstOrDefault(s => s > z + 0.001) : Steps.LastOrDefault(s => s < z - 0.001);
             if (next == 0) return;
-            st.Zoom = next; st.Save();
+            Cfg.Zoom = next; Settings.Current.Save();
             scale.ScaleX = scale.ScaleY = next;
         }
 
-        // ── Bandeja del sistema ──
+        public void HidePanel() { Hide(); Cfg.Hidden = true; Settings.Current.Save(); AppCtl.HiddenHint(); }
 
-        void SetupTray()
+        public void ShowPanel()
         {
-            tray = new System.Windows.Forms.NotifyIcon { Visible = true, Text = "Uso de Claude", Icon = Mascot.TrayIcon(null) };
-            tray.MouseClick += (_, e) => { if (e.Button == System.Windows.Forms.MouseButtons.Left) ShowWidget(); };
-            var m = new System.Windows.Forms.ContextMenuStrip();
-            m.Items.Add("Mostrar widget  (Ctrl+Alt+U)", null, (_, __) => ShowWidget());
-            m.Items.Add("Actualizar ahora", null, (_, __) => _ = Refresh());
-            m.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-            m.Items.Add("Iniciar sesión en claude.ai…", null, (_, __) => LoginClaude());
-            m.Items.Add("Iniciar sesión en ChatGPT…", null, (_, __) => LoginGpt());
-            m.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-            m.Items.Add("Salir", null, (_, __) => Quit());
-            tray.ContextMenuStrip = m;
-        }
-
-        void UpdateTray()
-        {
-            var s = claude.FirstOrDefault(r => !r.IsWeek);
-            var w = claude.FirstOrDefault(r => r.IsWeek);
-            var gs = gpt.FirstOrDefault(r => !r.IsWeek);
-            var gw = gpt.FirstOrDefault(r => r.IsWeek);
-            string p(Row r) => r == null ? "–" : $"{Math.Round(r.Percent)}%";
-            var text = $"Claude sem {p(w)} · 5h {p(s)}" + (st.ShowGpt && gpt.Count > 0 ? $"\nGPT sem {p(gw)} · 5h {p(gs)}" : "");
-            tray.Text = text.Length > 127 ? text[..127] : text;
-            var old = tray.Icon;
-            tray.Icon = Mascot.TrayIcon(s?.Percent);
-            old?.Dispose();
-        }
-
-        void Minimize() { Hide(); st.Minimized = true; st.Save(); tray.ShowBalloonTip(2000, "Uso de Claude", "Sigue aquí. Ctrl+Alt+U o clic en el icono para volver.", System.Windows.Forms.ToolTipIcon.None); }
-
-        void ShowWidget()
-        {
-            st.Minimized = false; st.Save();
-            Show(); Activate(); Topmost = true;
+            Cfg.Hidden = false; Settings.Current.Save();
+            Show(); Activate(); Topmost = Cfg.OnTop;
             var wa = SystemParameters.WorkArea;
             if (Left > SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 40 || Top > SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 40)
             { Left = wa.Right - ActualWidth - 20; Top = wa.Top + 20; SavePos(); }
         }
 
-        void Quit() { tray.Visible = false; tray.Dispose(); Application.Current.Shutdown(); }
-
         ContextMenu BuildMenu()
         {
             var m = new ContextMenu();
-            void item(string h, Action a) { var i = new MenuItem { Header = h }; i.Click += (_, __) => a(); m.Items.Add(i); }
-            item("Actualizar ahora", () => _ = Refresh());
-            item("Más grande", () => SetZoom(1));
-            item("Más pequeño", () => SetZoom(-1));
-            item("Minimizar a la bandeja", Minimize);
+            MenuItem item(ItemsControl parent, string h, Action a, bool? check = null)
+            {
+                var i = new MenuItem { Header = h };
+                if (check != null) { i.IsCheckable = true; i.IsChecked = check.Value; }
+                i.Click += (_, __) => a();
+                parent.Items.Add(i);
+                return i;
+            }
+            item(m, "Actualizar ahora", () => _ = Data.Refresh(force: true));
+            var what = new MenuItem { Header = "Qué muestra este widget" };
+            foreach (var s in SvcInfo.All)
+            {
+                var k = SvcInfo.Key(s);
+                item(what, SvcInfo.Title(s), () =>
+                {
+                    if (Cfg.Services.Contains(k)) { if (Cfg.Services.Count > 1) Cfg.Services.Remove(k); }
+                    else Cfg.Services = SvcInfo.All.Select(SvcInfo.Key).Where(x => x == k || Cfg.Services.Contains(x)).ToList();
+                    Settings.Current.Save(); Render();
+                }, Cfg.Services.Contains(k));
+            }
+            m.Items.Add(what);
+            var fmt = new MenuItem { Header = "Formato" };
+            foreach (var l in Layouts) item(fmt, LayoutName(l), () => { Cfg.Layout = l; Settings.Current.Save(); Render(); }, Cfg.Layout == l);
+            m.Items.Add(fmt);
+            item(m, "Más grande", () => SetZoom(1));
+            item(m, "Más pequeño", () => SetZoom(-1));
+            item(m, "Siempre por encima (si no, se queda en el escritorio)", () => { Cfg.OnTop = !Cfg.OnTop; Topmost = Cfg.OnTop; Settings.Current.Save(); }, Cfg.OnTop);
             m.Items.Add(new Separator());
+            item(m, "Nuevo widget", () => AppCtl.NewPanel());
+            if (AppCtl.Panels.Count > 1) item(m, "Cerrar este widget", () => AppCtl.ClosePanel(this));
+            item(m, "Ocultar", HidePanel);
+            m.Items.Add(new Separator());
+            AppCtl.AccountItems(m);
+            m.Items.Add(new Separator());
+            item(m, "Salir", AppCtl.Quit);
+            return m;
+        }
+    }
+
+    // ───────────────────────── Aplicación: widgets, barra de tareas y atajo ─────────────────────────
+
+    public static class AppCtl
+    {
+        public static readonly List<Widget> Panels = new();
+        static readonly Dictionary<Svc, System.Windows.Forms.NotifyIcon> trays = new();
+        static System.Windows.Forms.NotifyIcon baseTray;
+        static HwndSource hotkeyWin;
+        static bool hinted;
+
+        [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint mods, uint vk);
+        const int HOTKEY_ID = 0x5544;
+
+        public static void Start()
+        {
+            var st = Settings.Current;
+            if (st.Panels == null || st.Panels.Count == 0)
+            {
+                // Primera vez con esta versión: el widget de antes pasa a ser el primero
+                st.Panels = new() { new PanelConfig
+                {
+                    X = st.X, Y = st.Y, Zoom = st.Zoom, Hidden = st.Minimized,
+                    Services = st.ShowGpt ? new() { "claude", "gpt", "openai", "soniox" } : new() { "claude", "openai", "soniox" }
+                } };
+                st.Save();
+            }
+            foreach (var c in st.Panels) Open(c);
+
+            // Atajo Ctrl+Alt+U con una ventana invisible de mensajes
+            hotkeyWin = new HwndSource(new HwndSourceParameters("UsoDeClaudeAtajo") { ParentWindow = new IntPtr(-3) });
+            RegisterHotKey(hotkeyWin.Handle, HOTKEY_ID, 0x0001 | 0x0002 | 0x4000, 0x55);
+            hotkeyWin.AddHook((IntPtr hw, int msg, IntPtr wp, IntPtr lp, ref bool handled) =>
+            {
+                if (msg == 0x0312 && wp.ToInt32() == HOTKEY_ID) { ShowAll(); handled = true; }
+                return IntPtr.Zero;
+            });
+
+            Data.Changed += () => Application.Current.Dispatcher.Invoke(UpdateTray);
+            UpdateTray();
+
+            var refresh = new DispatcherTimer { Interval = TimeSpan.FromMinutes(2) };
+            refresh.Tick += (_, __) => _ = Data.Refresh();
+            refresh.Start();
+            var upd = new DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
+            upd.Tick += async (_, __) => { if (await Updater.CheckAndUpdate()) Quit(); };
+            upd.Start();
+
+            Application.Current.Dispatcher.InvokeAsync(async () =>
+            {
+                await Data.Refresh(force: true);
+                if (Data.NeedClaudeLogin && Data.Claude.Count == 0) LoginClaude();
+                if (await Updater.CheckAndUpdate()) Quit();
+            });
+        }
+
+        public static Widget Open(PanelConfig c)
+        {
+            var p = new Widget(c);
+            Panels.Add(p);
+            if (!c.Hidden) p.Show();
+            return p;
+        }
+
+        public static void NewPanel()
+        {
+            var c = new PanelConfig { Layout = "compacto", Services = new() { "claude", "gpt" } };
+            Settings.Current.Panels.Add(c); Settings.Current.Save();
+            Open(c);
+        }
+
+        public static void ClosePanel(Widget p)
+        {
+            if (Panels.Count <= 1) return;
+            Panels.Remove(p); Settings.Current.Panels.Remove(p.Cfg); Settings.Current.Save();
+            p.Close();
+        }
+
+        public static void ShowAll() { foreach (var p in Panels) p.ShowPanel(); }
+
+        public static void HiddenHint()
+        {
+            if (hinted) return;
+            hinted = true;
+            (trays.Values.FirstOrDefault() ?? baseTray)?.ShowBalloonTip(2500, "Uso de Claude", "Sigue aquí. Ctrl+Alt+U o clic en el icono para volver.", System.Windows.Forms.ToolTipIcon.None);
+        }
+
+        public static void Quit()
+        {
+            foreach (var t in trays.Values) { t.Visible = false; t.Dispose(); }
+            if (baseTray != null) { baseTray.Visible = false; baseTray.Dispose(); }
+            Application.Current.Shutdown();
+        }
+
+        // ── Sesiones y claves ──
+
+        public static void LoginClaude() => new LoginWindow("https://claude.ai/login", LoginWindow.Cookie("https://claude.ai", "sessionKey"), () => _ = Data.Refresh(true)).Show();
+        public static void LoginGpt() => new LoginWindow("https://chatgpt.com/auth/login", LoginWindow.Cookie("https://chatgpt.com", "session-token"), () => _ = Data.Refresh(true)).Show();
+        public static void LoginOpenAI() => new LoginWindow("https://platform.openai.com/login", LoginWindow.OpenAIToken, () =>
+        {
+            Settings.Current.OpenAISession = true; Settings.Current.Save();
+            _ = Data.Refresh(true);
+        }).Show();
+
+        public static void SonioxKey() => new KeyWindow("API de Soniox",
+            "Pega una clave de API de console.soniox.com (API keys). Solo se usa para leer el saldo y el gasto, y se guarda cifrada en este ordenador.",
+            k => { Secret.Save("soniox", k); _ = Data.Refresh(true); },
+            Secret.Read("soniox") != null ? () => { Secret.Delete("soniox"); Data.SonioxW = null; _ = Data.Refresh(true); } : null).Show();
+
+        public static void AccountItems(ItemsControl m)
+        {
+            void item(string h, Action a) { var i = new MenuItem { Header = h }; i.Click += (_, __) => a(); m.Items.Add(i); }
             item("Iniciar sesión en claude.ai…", LoginClaude);
             item("Iniciar sesión en ChatGPT…", LoginGpt);
-            var gptItem = new MenuItem { Header = "Mostrar ChatGPT", IsCheckable = true, IsChecked = st.ShowGpt };
-            gptItem.Click += (_, __) => { st.ShowGpt = gptItem.IsChecked; st.Save(); _ = Refresh(); };
-            m.Items.Add(gptItem);
-            var auto = new MenuItem { Header = "Abrir al iniciar Windows", IsCheckable = true, IsChecked = st.AutoStart };
-            auto.Click += (_, __) => { st.AutoStart = auto.IsChecked; st.Save(); Updater.SetAutoStart(st.AutoStart); };
+            item("Iniciar sesión en OpenAI (saldo de la API)…", LoginOpenAI);
+            item("Clave de la API de Soniox…", SonioxKey);
+            var bar = new MenuItem { Header = "En la barra de tareas" };
+            foreach (var s in SvcInfo.All)
+            {
+                var k = SvcInfo.Key(s);
+                var i = new MenuItem { Header = SvcInfo.Title(s), IsCheckable = true, IsChecked = Settings.Current.Tray.Contains(k) };
+                i.Click += (_, __) => { if (Settings.Current.Tray.Contains(k)) Settings.Current.Tray.Remove(k); else Settings.Current.Tray.Add(k); Settings.Current.Save(); UpdateTray(); };
+                bar.Items.Add(i);
+            }
+            m.Items.Add(bar);
+            var auto = new MenuItem { Header = "Abrir al iniciar Windows", IsCheckable = true, IsChecked = Settings.Current.AutoStart };
+            auto.Click += (_, __) => { Settings.Current.AutoStart = auto.IsChecked; Settings.Current.Save(); Updater.SetAutoStart(Settings.Current.AutoStart); };
             m.Items.Add(auto);
-            m.Items.Add(new Separator());
             item($"Versión {Updater.Current} · buscar actualización", async () => { if (await Updater.CheckAndUpdate()) Quit(); });
-            item("Salir", Quit);
+        }
+
+        // ── Barra de tareas: un icono por servicio con su personaje y su dato ──
+
+        static System.Windows.Forms.ContextMenuStrip TrayMenu()
+        {
+            var m = new System.Windows.Forms.ContextMenuStrip();
+            m.Items.Add("Mostrar los widgets  (Ctrl+Alt+U)", null, (_, __) => ShowAll());
+            m.Items.Add("Nuevo widget", null, (_, __) => NewPanel());
+            m.Items.Add("Actualizar ahora", null, (_, __) => _ = Data.Refresh(true));
+            m.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+            m.Items.Add("Iniciar sesión en claude.ai…", null, (_, __) => LoginClaude());
+            m.Items.Add("Iniciar sesión en ChatGPT…", null, (_, __) => LoginGpt());
+            m.Items.Add("Iniciar sesión en OpenAI…", null, (_, __) => LoginOpenAI());
+            m.Items.Add("Clave de la API de Soniox…", null, (_, __) => SonioxKey());
+            m.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+            m.Items.Add("Salir", null, (_, __) => Quit());
             return m;
+        }
+
+        static System.Windows.Forms.NotifyIcon MakeTray()
+        {
+            var t = new System.Windows.Forms.NotifyIcon { Visible = true, Text = "Uso de Claude", ContextMenuStrip = TrayMenu() };
+            t.MouseClick += (_, e) => { if (e.Button == System.Windows.Forms.MouseButtons.Left) ShowAll(); };
+            return t;
+        }
+
+        static void SetIcon(System.Windows.Forms.NotifyIcon t, System.Drawing.Icon i) { var old = t.Icon; t.Icon = i; old?.Dispose(); }
+
+        public static void UpdateTray()
+        {
+            var want = SvcInfo.All.Where(s => Settings.Current.Tray.Contains(SvcInfo.Key(s))).ToList();
+            foreach (var s in trays.Keys.Where(k => !want.Contains(k)).ToList()) { trays[s].Visible = false; trays[s].Dispose(); trays.Remove(s); }
+            // Windows coloca el icono más nuevo a la izquierda: se crean en orden inverso
+            foreach (var s in Enumerable.Reverse(want)) if (!trays.ContainsKey(s)) trays[s] = MakeTray();
+            foreach (var s in want)
+            {
+                var c = Data.Card(s);
+                SetIcon(trays[s], Sprites.TrayIcon(c));
+                var tip = SvcInfo.Title(s) + ": " + (c.HasData ? string.Join(" · ", c.Lines.Take(3).Select(l => $"{l.Label} {l.Value}")) : c.Error ?? "sin datos");
+                trays[s].Text = tip.Length > 127 ? tip[..127] : tip;
+            }
+            // Si no se ha elegido ninguno, queda uno genérico para poder volver a los widgets
+            if (want.Count == 0) { baseTray ??= MakeTray(); SetIcon(baseTray, Sprites.TrayIcon(Data.Card(Svc.Claude))); }
+            else if (baseTray != null) { baseTray.Visible = false; baseTray.Dispose(); baseTray = null; }
         }
     }
 
@@ -865,16 +1305,34 @@ namespace UsoDeClaude
         [STAThread]
         public static void Main()
         {
-            // Prueba automática en GitHub: abre la ventana, mide y sale
+            // Prueba automática en GitHub: pinta cada formato con datos de ejemplo, guarda capturas y sale
             if (Environment.GetEnvironmentVariable("WIDGET_SELFTEST") != null)
             {
                 var tapp = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                var tw = new Widget();
-                tw.Show();
-                var tt = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+                Data.LoadSample();
+                Settings.Current.Panels = new();
+                var panels = Widget.Layouts.Select(l => { var c = new PanelConfig { Layout = l, X = 20, Y = 20 }; var p = new Widget(c); p.Show(); return p; }).ToList();
+                var tt = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
                 tt.Tick += (_, __) =>
                 {
-                    File.WriteAllText("selftest.txt", $"ventana={tw.ActualWidth:0}x{tw.ActualHeight:0} version={Updater.Current}");
+                    tt.Stop();
+                    var log = new StringBuilder($"version={Updater.Current}\n");
+                    Directory.CreateDirectory("shots");
+                    foreach (var p in panels)
+                    {
+                        var e = p.CardElement;
+                        log.AppendLine($"{p.Cfg.Layout}: ventana={p.ActualWidth:0}x{p.ActualHeight:0}");
+                        var bmp = new RenderTargetBitmap((int)Math.Ceiling(e.ActualWidth * 1.5), (int)Math.Ceiling(e.ActualHeight * 1.5), 144, 144, PixelFormats.Pbgra32);
+                        var dv = new DrawingVisual();
+                        using (var dc = dv.RenderOpen()) dc.DrawRectangle(new VisualBrush(e), null, new Rect(0, 0, e.ActualWidth, e.ActualHeight));
+                        bmp.Render(dv);
+                        var enc = new PngBitmapEncoder(); enc.Frames.Add(BitmapFrame.Create(bmp));
+                        using var f = File.Create(IOPath.Combine("shots", p.Cfg.Layout + ".png")); enc.Save(f);
+                    }
+                    foreach (var s in SvcInfo.All)
+                        using (var f = File.Create(IOPath.Combine("shots", "icono-" + SvcInfo.Key(s) + ".png")))
+                            Sprites.TrayIcon(Data.Card(s)).ToBitmap().Save(f, System.Drawing.Imaging.ImageFormat.Png);
+                    File.WriteAllText("selftest.txt", log.ToString());
                     tapp.Shutdown();
                 };
                 tt.Start();
@@ -887,12 +1345,9 @@ namespace UsoDeClaude
             using var single = new System.Threading.Mutex(true, "UsoDeClaude-unico", out bool first);
             if (!first) return;
 
-            var settings = Settings.Load();
-            Updater.SetAutoStart(settings.AutoStart);
-
+            Updater.SetAutoStart(Settings.Current.AutoStart);
             var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-            var w = new Widget();
-            w.Show();
+            app.Startup += (_, __) => AppCtl.Start();
             app.Run();
         }
     }

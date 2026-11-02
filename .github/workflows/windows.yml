@@ -22,6 +22,9 @@ jobs:
           if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "La app no terminó la prueba" }
           if (-not (Test-Path selftest.txt)) { throw "La app se cerró sin completar la prueba (código $($p.ExitCode))" }
           Get-Content selftest.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: capturas-windows, path: shots }
       - name: Publicar
         shell: bash
         env: { GH_TOKEN: "${{ github.token }}" }
