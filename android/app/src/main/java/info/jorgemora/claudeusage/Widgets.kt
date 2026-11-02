@@ -214,6 +214,7 @@ object Widgets {
             val at = cards.maxOfOrNull { it.updated } ?: 0L
             v.setTextViewText(R.id.footer, when {
                 refreshing -> "Actualizando…"
+                at > 0 && w < 250 -> "Actualizado ${hourText(at)}"
                 at > 0 -> "Actualizado ${hourText(at)} · toca para actualizar"
                 else -> "Toca para actualizar"
             })
