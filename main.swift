@@ -2275,4 +2275,16 @@ let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
+// Menú Edición invisible: sin él, ⌘V, ⌘C, ⌘X y ⌘A no funcionan en los campos de texto
+let mainMenu = NSMenu()
+let editItem = NSMenuItem()
+let editMenu = NSMenu(title: "Edición")
+editMenu.addItem(withTitle: "Deshacer", action: Selector(("undo:")), keyEquivalent: "z")
+editMenu.addItem(withTitle: "Cortar", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+editMenu.addItem(withTitle: "Copiar", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+editMenu.addItem(withTitle: "Pegar", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+editMenu.addItem(withTitle: "Seleccionar todo", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+editItem.submenu = editMenu
+mainMenu.addItem(editItem)
+app.mainMenu = mainMenu
 app.run()
