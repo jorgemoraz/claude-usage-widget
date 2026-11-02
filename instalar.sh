@@ -66,6 +66,19 @@ if ! xcrun swiftc -O "$BUILD_DIR/main.swift" -o "$APP/Contents/MacOS/$BIN"; then
   exit 1
 fi
 
+# Icono de la app (para el Launchpad, Spotlight y el Finder): el personaje de Claude
+ICON_SRC="$APP/Contents/Resources/sprites/claude-0-0.png"
+if [[ -f "$ICON_SRC" ]]; then
+  ISET="$BUILD_DIR/AppIcon.iconset"
+  mkdir -p "$ISET"
+  for s in 16 32 128 256 512; do
+    sips -z $s $s "$ICON_SRC" --out "$ISET/icon_${s}x${s}.png" >/dev/null 2>&1 || true
+    d=$((s * 2))
+    sips -z $d $d "$ICON_SRC" --out "$ISET/icon_${s}x${s}@2x.png" >/dev/null 2>&1 || true
+  done
+  iconutil -c icns "$ISET" -o "$APP/Contents/Resources/AppIcon.icns" >/dev/null 2>&1 || true
+fi
+
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -75,6 +88,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleDisplayName</key><string>${NAME}</string>
   <key>CFBundleIdentifier</key><string>${ID}</string>
   <key>CFBundleExecutable</key><string>${BIN}</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${SHA:0:7}</string>
   <key>CFBundleVersion</key><string>1</string>
@@ -119,5 +133,9 @@ else
   printf '%s\n' "$NEW_PLIST" > "$AGENT"
   launchctl bootstrap "$DOMAIN" "$AGENT"
 fi
+
+# Que el Launchpad y Spotlight vean la app (y su icono) en su sitio
+touch "$DEST"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$DEST" >/dev/null 2>&1 || true
 
 echo "Listo: «${NAME}» ${SHA:0:7} instalado. Se actualizará solo desde GitHub."

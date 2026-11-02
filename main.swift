@@ -2156,6 +2156,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             GetApplicationEventTarget(), 0, &hotKeyRef)
     }
 
+    /// Abrir la app desde el Launchpad, Spotlight o el Finder con el widget ya en marcha: lo muestra
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showAll()
+        return true
+    }
+
     @objc func showAll() {
         minimized = false
         for pc in panels {
