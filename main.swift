@@ -1281,6 +1281,9 @@ extension UsageModel {
 
 // MARK: Personajes (dibujos de Jorge, 4 estados × 3 fotogramas)
 
+/// En las capturas de prueba no hay cristal real: se pinta un fondo oscuro
+var renderingShots = false
+
 enum Sprites {
     static var cache: [String: NSImage] = [:]
 
@@ -1288,7 +1291,8 @@ enum Sprites {
         let name = "\(who)-\(row)-\(frame)"
         if let i = cache[name] { return i }
         let dirs = [Bundle.main.resourceURL?.appendingPathComponent("sprites"),
-                    Updater.support.appendingPathComponent("sprites")].compactMap { $0 }
+                    Updater.support.appendingPathComponent("sprites"),
+                    ProcessInfo.processInfo.environment["WIDGET_SPRITES"].map { URL(fileURLWithPath: $0) }].compactMap { $0 }
         for d in dirs {
             if let i = NSImage(contentsOf: d.appendingPathComponent(name + ".png")) { cache[name] = i; return i }
         }
@@ -1554,7 +1558,7 @@ struct WidgetView: View {
                 .fixedSize()
                 .background(
                     ZStack {
-                        GlassBackground(radius: radius)
+                        if renderingShots { Color(red: 0.13, green: 0.12, blue: 0.13) } else { GlassBackground(radius: radius) }
                         LinearGradient(colors: [tint(worst).opacity(0.16), .clear], startPoint: .top, endPoint: .center)
                     }
                     .clipShape(shape)
@@ -2052,6 +2056,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Prueba automática (solo en GitHub Actions): mide la ventana antes y después de agrandar
     func selfTest() {
+        if let dir = ProcessInfo.processInfo.environment["WIDGET_SHOTS"] { return shots(dir) }
         guard let pc = panels.first else { exit(1) }
         func report(_ tag: String) {
             print("[\(tag)] zoom=\(pc.settings.cfg.zoom) ventana=\(pc.panel.frame.size) fitting=\(pc.fitting())")
@@ -2064,6 +2069,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pc.settings.cfg.layout = .horizontal
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 7.5) { report("horizontal"); exit(0) }
+    }
+
+    /// Capturas de cada formato con datos de ejemplo (solo en GitHub Actions, para revisar el diseño)
+    func shots(_ dir: String) {
+        let now = Date()
+        model.rows = [
+            UsageRow(id: "five_hour", label: "Sesión (5 h)", percent: 42, resetsAt: now.addingTimeInterval(7200), window: 18000),
+            UsageRow(id: "seven_day", label: "Semana · todos los modelos", percent: 63, resetsAt: now.addingTimeInterval(3 * 86400), window: 604800),
+            UsageRow(id: "seven_day_sonnet", label: "Semana · Sonnet", percent: 12, resetsAt: now.addingTimeInterval(3 * 86400), window: 604800),
+        ]
+        model.gptRows = [
+            UsageRow(id: "gpt_p", label: "Sesión (5 h)", percent: 81, resetsAt: now.addingTimeInterval(3000), window: 18000),
+            UsageRow(id: "gpt_s", label: "Semana", percent: 30, resetsAt: now.addingTimeInterval(5 * 86400), window: 604800),
+        ]
+        model.openai = Wallet(available: 7.30, used: 42.70, granted: 50, month: 3.10, source: "OpenAI")
+        model.soniox = Wallet(available: 1.20, used: 18.80, granted: 20, month: 4.60, budget: 10, source: "Soniox")
+        model.lastUpdate = now
+        renderingShots = true
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            for layout in WidgetLayout.allCases {
+                let st = PanelSettings(PanelConfig(layout: layout))
+                let view = WidgetView(model: self.model, settings: st, actions: self.actions(for: self.panels[0]), onControlsRect: { _ in })
+                    .padding(20)
+                    .background(Color(red: 0.55, green: 0.6, blue: 0.68))
+                let r = ImageRenderer(content: view)
+                r.scale = 2
+                if let img = r.nsImage, let tiff = img.tiffRepresentation,
+                   let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(layout.rawValue).png"))
+                    print("[captura] \(layout.rawValue) \(img.size)")
+                }
+            }
+            fflush(stdout)
+            exit(0)
+        }
     }
 
     // MARK: Atajo de teclado global ⌃⌥⌘U

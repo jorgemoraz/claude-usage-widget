@@ -14,3 +14,12 @@ jobs:
         run: |
           defaults write ClaudeUsage zoom -float 1 || true
           (WIDGET_SELFTEST=1 ./ClaudeUsage > test.log 2>&1 &) ; sleep 12; cat test.log; pkill ClaudeUsage || true
+      - name: Capturas de los formatos
+        run: |
+          (WIDGET_SELFTEST=1 WIDGET_SHOTS="$PWD/capturas" WIDGET_SPRITES="$PWD/sprites" ./ClaudeUsage > shots.log 2>&1 &) ; sleep 15; cat shots.log; pkill ClaudeUsage || true
+          ls -la capturas || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capturas
+          path: capturas
+          if-no-files-found: warn
