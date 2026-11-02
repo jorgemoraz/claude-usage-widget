@@ -1226,7 +1226,7 @@ namespace UsoDeClaude
         }).Show();
 
         public static void SonioxKey() => new KeyWindow("API de Soniox",
-            "Pega una clave de API de console.soniox.com (API keys). Solo se usa para leer el saldo y el gasto, y se guarda cifrada en este ordenador.",
+            "Pega una clave de organización de Soniox (empieza por snx_org_): console.soniox.com › Settings › Organization API keys. Las de proyecto (snx_proj_) no dan acceso al saldo. Solo se usa para leer el saldo y el gasto, y se guarda cifrada en este ordenador.",
             k => { Secret.Save("soniox", k); _ = Data.Refresh(true); },
             Secret.Read("soniox") != null ? () => { Secret.Delete("soniox"); Data.SonioxW = null; _ = Data.Refresh(true); } : null).Show();
 

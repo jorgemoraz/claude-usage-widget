@@ -140,7 +140,7 @@ class MainActivity : Activity() {
         }
         val b = android.app.AlertDialog.Builder(this)
             .setTitle("API de Soniox")
-            .setMessage("Pega una clave de API de console.soniox.com (API keys). Solo se usa para leer el saldo y el gasto, y se queda en este móvil.")
+            .setMessage("Pega una clave de organización de Soniox (empieza por snx_org_): console.soniox.com › Settings › Organization API keys. Las de proyecto (snx_proj_) no dan acceso al saldo. Solo se usa para leer el saldo y el gasto, y se queda en este móvil.")
             .setView(field)
             .setPositiveButton("Guardar") { _, _ ->
                 val k = field.text.toString().trim()

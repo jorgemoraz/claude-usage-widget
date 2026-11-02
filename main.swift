@@ -698,13 +698,14 @@ struct Wallet: Equatable {
 }
 
 enum APIError: LocalizedError {
-    case noKey(String), needLogin(String), http(String, Int), badData(String)
+    case noKey(String), needLogin(String), http(String, Int), badData(String), badKey
     var errorDescription: String? {
         switch self {
         case .noKey(let s): return "Falta la clave de \(s): clic derecho › Clave de la API de \(s)…"
         case .needLogin(let s): return "Inicia sesión en \(s) para ver el saldo: clic derecho › Iniciar sesión en \(s)…"
         case .http(let s, let c): return "\(s) respondió con un error \(c)."
         case .badData(let s): return "Respuesta inesperada de \(s)."
+        case .badKey: return "Esa es una clave de proyecto. Soniox pide una de organización (snx_org_…): Settings › Organization API keys."
         }
     }
 }
@@ -732,6 +733,7 @@ enum SonioxAPI {
 
     static func fetch(_ done: @escaping (Result<Wallet, Error>) -> Void) {
         guard let k = key else { return done(.failure(APIError.noKey("Soniox"))) }
+        if k.hasPrefix("snx_proj_") { return done(.failure(APIError.badKey)) }
         get("organization/balance", k) { r1 in
             get("organization/usage/monthly", k) { r2 in
                 var w = Wallet(source: "Soniox")
@@ -2258,7 +2260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Clave de la API de Soniox"
-        alert.informativeText = "Pega una clave de API de Soniox (console.soniox.com › API keys). Con ella el widget lee el saldo prepago y el gasto del mes. Se guarda solo en el Llavero de este Mac. Déjala vacía para borrarla."
+        alert.informativeText = "Pega una clave de organización de Soniox (empieza por snx_org_; console.soniox.com › Settings › Organization API keys). Las claves de proyecto (snx_proj_) no dan acceso al saldo. Con ella el widget lee el saldo prepago y el gasto del mes. Se guarda solo en el Llavero de este Mac. Déjala vacía para borrarla."
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         alert.accessoryView = field
         alert.addButton(withTitle: "Guardar")
