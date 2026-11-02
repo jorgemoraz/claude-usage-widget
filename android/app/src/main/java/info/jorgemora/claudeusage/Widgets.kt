@@ -146,6 +146,7 @@ object Widgets {
     /** Tarjeta completa: personaje, frase y hasta [maxLines] líneas con barra */
     private fun full(c: Context, card: Card, maxLines: Int, wide: Boolean): RemoteViews {
         val v = RemoteViews(c.packageName, R.layout.cell_card)
+        v.removeAllViews(R.id.lines)
         sprite(c, v, card)
         v.setTextViewText(R.id.name, card.service.title)
         v.setTextColor(R.id.name, card.service.color)
@@ -180,6 +181,7 @@ object Widgets {
         if (h < 100) {
             // Una fila: tantas columnas como quepan
             v = RemoteViews(c.packageName, R.layout.w_root_row)
+            v.removeAllViews(R.id.cells)
             val fit = max(1, min(n, (w / 96).toInt()))
             val wide = w / fit >= 150
             val narrow = w / fit < 120
@@ -188,6 +190,7 @@ object Widgets {
             v.setViewVisibility(R.id.footer, if (refreshing) View.VISIBLE else View.GONE)
         } else {
             v = RemoteViews(c.packageName, R.layout.w_root)
+            v.removeAllViews(R.id.cells)
             val avail = h - 24 - 18
             val per = avail / n
             when {

@@ -41,6 +41,9 @@ class Capturas {
             ins.runOnMainSync {
                 val parent = FrameLayout(c)
                 val v: View = Widgets.build(c, list, w, h, false).apply(c, parent)
+                // El escritorio reaplica las actualizaciones sobre la vista existente: dos veces más, como en un móvil real
+                Widgets.build(c, list, w, h, true).reapply(c, v)
+                Widgets.build(c, list, w, h, false).reapply(c, v)
                 val pw = (w * d).toInt(); val ph = (h * d).toInt()
                 v.measure(View.MeasureSpec.makeMeasureSpec(pw, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(ph, View.MeasureSpec.EXACTLY))
                 v.layout(0, 0, pw, ph)
