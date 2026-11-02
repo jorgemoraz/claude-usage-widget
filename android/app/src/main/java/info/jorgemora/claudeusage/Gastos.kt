@@ -20,7 +20,10 @@ data class Spend(
     val tokens: Double, val tokensApps: Double, val tokensAPIs: Double,
     val apiUSD: Double, val budgetUSD: Double?, val savedEUR: Double,
     val apps: List<Pair<String, String>>, val apis: List<Pair<String, String>>,
-)
+    val apiByName: Map<String, Double> = emptyMap(),
+) {
+    fun apiUSD(name: String): Double? = apiByName.entries.firstOrNull { it.key.contains(name) }?.value
+}
 
 object Gastos {
     private fun prefs(c: Context) = c.getSharedPreferences("gastos", Context.MODE_PRIVATE)
@@ -78,12 +81,14 @@ object Gastos {
             name to tokensText(o.optJSONObject(k)?.optDouble("tokens", 0.0) ?: 0.0)
         }
         val apis = mutableListOf<Pair<String, String>>()
+        val byName = mutableMapOf<String, Double>()
         val arr = o.optJSONArray("apis")
         if (arr != null) for (i in 0 until arr.length()) {
             val a = arr.getJSONObject(i)
             val usd = a.optDouble("usd", 0.0)
             val tok = a.optDouble("tokens", 0.0)
             val min = a.optDouble("minutos", 0.0)
+            byName[a.optString("nombre", "").lowercase()] = usd
             if (usd <= 0 && tok <= 0) continue
             var d = String.format(Locale("es", "ES"), "%.2f $", usd)
             if (tok > 0) d += " · " + tokensText(tok)
@@ -95,7 +100,7 @@ object Gastos {
             t.optDouble("tokens", 0.0), t.optDouble("tokens_suscripciones", 0.0), t.optDouble("tokens_apis", 0.0),
             t.optDouble("apis_usd", moni.optDouble("usd", 0.0)),
             if (moni.isNull("presupuesto_usd")) null else moni.optDouble("presupuesto_usd"),
-            t.optDouble("ahorro_suscripciones_eur", 0.0), apps, apis,
+            t.optDouble("ahorro_suscripciones_eur", 0.0), apps, apis, byName,
         )
     }
 }

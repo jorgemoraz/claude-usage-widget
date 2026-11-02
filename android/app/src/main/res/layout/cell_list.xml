@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/cell"
+    android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+    android:orientation="horizontal" android:gravity="center_vertical" android:paddingStart="6dp" android:paddingEnd="4dp">
+    <ViewFlipper android:id="@+id/sprite" android:layout_width="@dimen/sprite_small" android:layout_height="@dimen/sprite_small" android:autoStart="true" android:flipInterval="550">
+        <ImageView android:id="@+id/f0" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitCenter" android:src="@drawable/sp_claude_0_0" />
+        <ImageView android:id="@+id/f1" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitCenter" android:src="@drawable/sp_claude_0_1" />
+        <ImageView android:id="@+id/f2" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitCenter" android:src="@drawable/sp_claude_0_2" />
+    </ViewFlipper>
+    <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginStart="7dp">
+        <TextView android:id="@+id/name" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="11sp" android:textStyle="bold" android:textColor="#FFE3876A" android:maxLines="1" android:text="Claude" />
+        <TextView android:id="@+id/big" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="21sp" android:textStyle="bold" android:textColor="#FFFFFFFF" android:maxLines="1" android:includeFontPadding="false" android:text="–" />
+        <TextView android:id="@+id/small" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#8CFFFFFF" android:maxLines="1" android:ellipsize="end" />
+    </LinearLayout>
+</LinearLayout>

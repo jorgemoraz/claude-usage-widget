@@ -3,7 +3,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="Uso de Claude"
-        android:icon="@drawable/mascot_feliz"
+        android:icon="@drawable/sp_claude_0_0"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:networkSecurityConfig="@xml/red">
         <activity android:name=".MainActivity" android:exported="true">
@@ -13,7 +13,12 @@
             </intent-filter>
         </activity>
         <activity android:name=".LoginActivity" android:exported="false" />
-        <receiver android:name=".UsageWidget" android:exported="true">
+        <activity android:name=".ConfigActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+        <receiver android:name=".UsageWidget" android:exported="true" android:label="Uso de Claude">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>

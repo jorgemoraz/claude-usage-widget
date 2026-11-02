@@ -27,7 +27,9 @@ class MainActivity : Activity() {
 
     private val scope = MainScope()
     private lateinit var status: TextView
-    private lateinit var mascot: ImageView
+    private lateinit var list: LinearLayout
+    private lateinit var openaiButton: Button
+    private lateinit var sonioxButton: Button
     private lateinit var updateButton: Button
     private lateinit var moniButton: Button
 
@@ -55,23 +57,24 @@ class MainActivity : Activity() {
             setOnClickListener { onClick() }
         }
 
-        mascot = ImageView(this).apply {
-            setImageResource(R.drawable.mascot_tranquilo)
-            layoutParams = LinearLayout.LayoutParams(dp(96), dp(96)).apply { gravity = Gravity.CENTER_HORIZONTAL }
-        }
-        root.addView(mascot)
         root.addView(text("Uso de Claude", 28f, bold = true).apply { gravity = Gravity.CENTER_HORIZONTAL })
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
         root.addView(text("Versión $ver", 13f, 0xFF8F8786.toInt()).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(4)) }
+        root.addView(list)
         root.addView(text("Inicia sesión una vez en cada servicio. Entra con tu correo y escribe el código que te llega; no toques el enlace del correo, porque se abriría en otra app. La ventana se cierra sola al entrar.", 14f, 0xFFB8B0AE.toInt()))
         root.addView(button("Iniciar sesión en Claude") { login("https://claude.ai/login") })
         root.addView(button("Iniciar sesión en ChatGPT") { login("https://chatgpt.com/auth/login") })
+        openaiButton = button("") { openai() }
+        root.addView(openaiButton)
+        sonioxButton = button("") { soniox() }
+        root.addView(sonioxButton)
         root.addView(button("Actualizar ahora") { refresh() })
         moniButton = button("") { connectMoni() }
         root.addView(moniButton)
         status = text("", 18f)
         root.addView(status)
-        root.addView(text("Para añadir el widget: mantén pulsado el escritorio › Widgets › Uso de Claude. Tócalo para actualizar; toca la mascota para abrir esta pantalla.", 13f, 0xFF8F8786.toInt()))
+        root.addView(text("Para añadir el widget: mantén pulsado el escritorio › Widgets › Uso de Claude. Hay dos: el grande y el de una fila; los dos se adaptan al tamaño (estíralos). Tócalo para actualizar; toca un personaje para abrir esta pantalla. Para elegir qué servicios muestra cada uno: mantén pulsado el widget › Configuración.", 13f, 0xFF8F8786.toInt()))
         updateButton = button("Descargar la última versión") { openLatest() }
         root.addView(updateButton)
 
@@ -101,7 +104,7 @@ class MainActivity : Activity() {
                 .setTitle("Gastos de Moni")
                 .setItems(arrayOf("Abrir el panel de gastos", "Desconectar")) { _, i ->
                     if (i == 0) Gastos.panelUrl(this)?.let { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) }
-                    else { Gastos.forget(this); show(); UsageWidget.updateAll(this) }
+                    else { Gastos.forget(this); show(); Widgets.updateAll(this) }
                 }.show()
             return
         }
@@ -116,6 +119,39 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    /** OpenAI: el saldo se lee con la sesión de platform.openai.com (vía no oficial) */
+    private fun openai() {
+        if (!OpenAI.hasSession(this)) return login("https://platform.openai.com/login")
+        android.app.AlertDialog.Builder(this)
+            .setTitle("API de OpenAI")
+            .setItems(arrayOf("Volver a iniciar sesión", "Cerrar sesión")) { _, i ->
+                if (i == 0) login("https://platform.openai.com/login")
+                else { OpenAI.logout(this); show(); Widgets.updateAll(this) }
+            }.show()
+    }
+
+    /** Soniox: clave de API (console.soniox.com › API keys). Se guarda solo en este móvil. */
+    private fun soniox() {
+        val field = android.widget.EditText(this).apply {
+            hint = "Clave de la API de Soniox"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val b = android.app.AlertDialog.Builder(this)
+            .setTitle("API de Soniox")
+            .setMessage("Pega una clave de API de console.soniox.com (API keys). Solo se usa para leer el saldo y el gasto, y se queda en este móvil.")
+            .setView(field)
+            .setPositiveButton("Guardar") { _, _ ->
+                val k = field.text.toString().trim()
+                if (k.length < 10) android.widget.Toast.makeText(this, "Esa clave no parece válida", android.widget.Toast.LENGTH_LONG).show()
+                else { Wallets.setSecret(this, Soniox.KEY, k); refresh() }
+            }
+            .setNegativeButton("Cancelar", null)
+        if (Wallets.secret(this, Soniox.KEY) != null) b.setNeutralButton("Borrar la clave") { _, _ ->
+            Wallets.setSecret(this, Soniox.KEY, null); show(); Widgets.updateAll(this)
+        }
+        b.show()
     }
 
     private fun login(url: String) {
@@ -150,23 +186,14 @@ class MainActivity : Activity() {
     }
 
     private fun show() {
-        val claude = Store.rows(this, "claude")
-        val gpt = Store.rows(this, "gpt")
-        mascot.setImageResource(Mood.from(claude.maxOfOrNull { it.percent }).drawable)
-        fun line(r: Row) = "  ${r.label}: ${r.percent.roundToInt()} %" +
-            (r.resetAt?.takeIf { it > System.currentTimeMillis() }?.let { " · se reinicia ${hourText(it)}" } ?: "")
-        val sb = StringBuilder()
-        sb.append("CLAUDE\n")
-        if (claude.isEmpty()) sb.append("  ").append(Store.error(this, "claude") ?: "Sin datos todavía").append("\n")
-        claude.forEach { sb.append(line(it)).append("\n") }
-        Store.error(this, "claude")?.takeIf { claude.isNotEmpty() }?.let { sb.append("  ⚠︎ ").append(it).append("\n") }
-        sb.append("\nCHATGPT\n")
-        if (gpt.isEmpty()) sb.append("  ").append(Store.error(this, "gpt") ?: "Sin datos todavía").append("\n")
-        gpt.forEach { sb.append(line(it)).append("\n") }
-        Store.error(this, "gpt")?.takeIf { gpt.isNotEmpty() }?.let { sb.append("  ⚠︎ ").append(it).append("\n") }
+        list.removeAllViews()
+        Cards.all(this).forEach { card -> list.addView(cardView(card)) }
+        openaiButton.text = if (OpenAI.hasSession(this)) "API de OpenAI…" else "Iniciar sesión en OpenAI (saldo de la API)"
+        sonioxButton.text = if (Wallets.secret(this, Soniox.KEY) != null) "Clave de la API de Soniox…" else "Pegar la clave de la API de Soniox"
         moniButton.text = if (Gastos.configured(this)) "Gastos de Moni…" else "Conectar con Moni (gastos del mes)"
+        val sb = StringBuilder()
         if (Gastos.configured(this)) {
-            sb.append("\nGASTOS DEL MES\n")
+            sb.append("GASTOS DEL MES\n")
             val g = Gastos.spend(this)
             if (g != null) {
                 sb.append("  Gastado: ${euros(g.spentEUR)} · previsto ${euros(g.forecastEUR)}\n")
@@ -179,5 +206,47 @@ class MainActivity : Activity() {
             Gastos.error(this)?.let { sb.append("  ⚠︎ ").append(it).append("\n") }
         }
         status.text = sb.toString()
+    }
+
+    /** Tarjeta de un servicio con su personaje animado */
+    private fun cardView(card: Card): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val anim = android.graphics.drawable.AnimationDrawable().apply {
+            for (i in 0..2) addFrame(getDrawable(Sprites.frame(this@MainActivity, card.service.sprite, card.row, i))!!, Sprites.interval(card.row))
+            isOneShot = false
+        }
+        row.addView(ImageView(this).apply {
+            setImageDrawable(anim)
+            layoutParams = LinearLayout.LayoutParams(dp(64), dp(64))
+            post { anim.start() }
+        })
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        col.addView(TextView(this).apply {
+            text = card.service.title + "  ·  " + card.phrase()
+            setTextColor(card.service.color); textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        if (card.lines.isEmpty()) col.addView(TextView(this).apply {
+            text = card.error ?: "Sin datos todavía"; setTextColor(0xFFFFB366.toInt()); textSize = 14f
+        })
+        card.lines.forEach { l ->
+            col.addView(TextView(this).apply {
+                text = "${l.label}: ${l.value}" + (l.note.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: "")
+                setTextColor(if (l.percent != null) l.color else Color.WHITE); textSize = 17f
+            })
+        }
+        if (card.lines.isNotEmpty()) card.error?.let { e ->
+            col.addView(TextView(this).apply { text = "⚠︎ $e"; setTextColor(0xFFFFB366.toInt()); textSize = 12f })
+        }
+        row.addView(col)
+        return row
     }
 }

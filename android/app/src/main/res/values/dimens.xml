@@ -1,0 +1,4 @@
+<resources>
+    <dimen name="sprite_small">38dp</dimen>
+    <dimen name="sprite_big">54dp</dimen>
+</resources>

@@ -54,7 +54,9 @@ object Parse {
         val out = mutableListOf<Row>()
         for ((key, label, span) in listOf(
             Triple("five_hour", "Sesión (5 h)", 18000L),
-            Triple("seven_day", "Semana", 604800L)
+            Triple("seven_day", "Semana", 604800L),
+            Triple("seven_day_opus", "Semana · Opus", 604800L),
+            Triple("seven_day_sonnet", "Semana · Sonnet", 604800L),
         )) {
             val d = o.optJSONObject(key) ?: continue
             if (d.isNull("utilization")) continue
@@ -89,25 +91,21 @@ object Parse {
     }
 }
 
-enum class Mood(val drawable: Int, val phrases: List<String>) {
-    FELIZ(R.drawable.mascot_feliz, listOf("A tope de energía", "Pídeme lo que quieras", "Fresco como una lechuga")),
-    TRANQUILO(R.drawable.mascot_tranquilo, listOf("Vamos bien", "Ritmo de crucero", "Aún queda gasolina")),
-    PREOCUPADO(R.drawable.mascot_preocupado, listOf("Ojo, que se acaba", "Dosifícame un poco", "Esto baja rápido")),
-    PANICO(R.drawable.mascot_panico, listOf("¡Últimas gotas!", "¡Que me apago!", "Solo para lo importante")),
-    AGOTADO(R.drawable.mascot_agotado, listOf("Fuera de combate", "Zzz… vuelvo pronto"));
-
-    fun phrase(): String = phrases[((System.currentTimeMillis() / 90_000) % phrases.size).toInt()]
-
-    companion object {
-        fun from(p: Double?): Mood = when {
-            p == null -> TRANQUILO
-            p >= 100 -> AGOTADO
-            p >= 90 -> PANICO
-            p >= 70 -> PREOCUPADO
-            p >= 40 -> TRANQUILO
-            else -> FELIZ
-        }
+/** Personajes animados: 4 humores (filas) × 3 fotogramas */
+object Sprites {
+    fun row(level: Double?): Int = when {
+        level == null -> 0
+        level >= 90 -> 3
+        level >= 75 -> 2
+        level >= 50 -> 1
+        else -> 0
     }
+
+    fun frame(c: Context, who: String, row: Int, f: Int): Int =
+        c.resources.getIdentifier("sp_${who}_${row}_$f", "drawable", c.packageName)
+
+    /** Más nervioso cuanto peor va */
+    fun interval(row: Int): Int = intArrayOf(650, 480, 320, 200)[row.coerceIn(0, 3)]
 }
 
 fun usageColor(p: Double): Int = when {

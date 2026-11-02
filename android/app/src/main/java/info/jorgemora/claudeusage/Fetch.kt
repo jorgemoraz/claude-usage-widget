@@ -173,10 +173,13 @@ object Fetch {
             val r = async { runCatching { Http.claude(c) }.getOrNull() }
             val g = async { runCatching { Http.gpt(c) }.getOrNull() }
             handle(c, "claude", "claude.ai", r.await(), Parse::claude)
+            val s = async { runCatching { Soniox.fetch(c) } }
+            val o = async { runCatching { OpenAI.fetch(c, foreground = false) } }
             handle(c, "gpt", "chatgpt.com", g.await(), Parse::gpt)
+            s.await(); o.await()
         }
         runCatching { Gastos.fetch(c) }
-        runCatching { UsageWidget.updateAll(c) }
+        runCatching { Widgets.updateAll(c) }
     }
 
     suspend fun all(c: Context, foreground: Boolean = false) {
@@ -189,7 +192,9 @@ object Fetch {
             if (foreground && (g == null || g.status != 200)) g = WebFetcher.run(c, "https://chatgpt.com/", GPT_JS) ?: g
             handle(c, "gpt", "chatgpt.com", g, Parse::gpt)
         }
+        runCatching { Soniox.fetch(c) }
+        runCatching { OpenAI.fetch(c, foreground) }
         runCatching { Gastos.fetch(c) }
-        runCatching { UsageWidget.updateAll(c) }
+        runCatching { Widgets.updateAll(c) }
     }
 }

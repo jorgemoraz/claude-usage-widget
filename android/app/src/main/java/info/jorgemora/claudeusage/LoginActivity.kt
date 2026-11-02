@@ -37,6 +37,27 @@ class LoginActivity : Activity() {
         }
     }
 
+    private val main = Handler(Looper.getMainLooper())
+    private val isOpenAI get() = (intent.getStringExtra("url") ?: "").contains("platform.openai.com")
+
+    /** OpenAI no deja una cookie fácil de reconocer: se busca su token de sesión dentro de la web */
+    private fun checkOpenAI() {
+        if (closing || isFinishing) return
+        val path = android.net.Uri.parse(web.url ?: "").path ?: ""
+        if (!path.startsWith("/login") && !path.startsWith("/auth") && (web.url ?: "").contains("platform.openai.com")) {
+            web.evaluateJavascript(OpenAI.TOKEN_JS) { v ->
+                val t = runCatching { org.json.JSONArray("[$v]").getString(0) }.getOrNull() ?: ""
+                if (t.length > 20 && !closing) {
+                    closing = true
+                    OpenAI.saveToken(this, t)
+                    label.text = "✓ Sesión iniciada"
+                    main.postDelayed({ done() }, 1000)
+                }
+            }
+        }
+        main.postDelayed({ checkOpenAI() }, 2500)
+    }
+
     private fun done() {
         CookieManager.getInstance().flush()
         Scheduler.now(this)
@@ -89,7 +110,9 @@ class LoginActivity : Activity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     val path = android.net.Uri.parse(url).path ?: ""
                     val onLogin = path.startsWith("/login") || path.startsWith("/auth") || path.contains("magic-link")
-                    if (!onLogin && loggedIn(start) && !closing) {
+                    if (isOpenAI) {
+                        if (!closing) label.text = "Inicia sesión en OpenAI; la ventana se cierra sola\n" + (android.net.Uri.parse(url).host ?: "") + path
+                    } else if (!onLogin && loggedIn(start) && !closing) {
                         closing = true
                         label.text = "✓ Sesión iniciada"
                         Handler(Looper.getMainLooper()).postDelayed({ done() }, 1200)
@@ -106,6 +129,7 @@ class LoginActivity : Activity() {
         root.addView(web)
         setContentView(root)
         web.loadUrl(start)
+        if (isOpenAI) main.postDelayed({ checkOpenAI() }, 3000)
     }
 
     @Deprecated("Deprecated in Java")
