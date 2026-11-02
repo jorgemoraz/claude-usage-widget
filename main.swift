@@ -1192,6 +1192,8 @@ struct CardLine: Identifiable {
     let value: String
     let reset: Date?
     let window: TimeInterval?
+    var shortLabel: String? = nil
+    var shortValue: String? = nil
 }
 
 /// Lo que se pinta de cada servicio, sea suscripción o API
@@ -1240,7 +1242,8 @@ extension UsageModel {
         c.caption = session != nil ? "de la sesión (5 h)" : "de la semana"
         c.compact = "sem \(week.map { "\(Int($0.percent.rounded()))%" } ?? "–")  ·  5h \(session.map { "\(Int($0.percent.rounded()))%" } ?? "–")"
         c.lines = rows.map { CardLine(id: $0.id, label: $0.label, percent: $0.percent, value: pctText($0.percent),
-                                      reset: $0.resetsAt, window: $0.window) }
+                                      reset: $0.resetsAt, window: $0.window,
+                                      shortLabel: $0.label.replacingOccurrences(of: " · todos los modelos", with: "")) }
         if let full = rows.first(where: { $0.percent >= 100 }) { c.exhaustedUntil = full.resetsAt }
         return c
     }
@@ -1257,19 +1260,22 @@ extension UsageModel {
             c.headline = dollars(m); c.short = dollars(m); c.caption = "gastado este mes"
         }
         var parts: [String] = []
-        if let a = w.available { parts.append("saldo \(dollars(a))") }
+        if let a = w.available { parts.append(dollars(a)) }
         if let m = w.month { parts.append("mes \(dollars(m))") }
-        c.compact = parts.joined(separator: "  ·  ")
+        c.compact = parts.joined(separator: " · ")
         if let g = w.granted, g > 0, let u = w.used {
             c.lines.append(CardLine(id: "saldo", label: "Consumido del saldo", percent: min(100, 100 * u / g),
-                                    value: "\(dollars(u)) de \(dollars(g))", reset: nil, window: nil))
+                                    value: "\(dollars(u)) de \(dollars(g))", reset: nil, window: nil,
+                                    shortLabel: "Consumido", shortValue: pctText(min(100, 100 * u / g))))
         }
         if let m = w.month {
             if let b = w.budget, b > 0 {
                 c.lines.append(CardLine(id: "mes", label: "Gastado este mes", percent: min(100, 100 * m / b),
-                                        value: "\(dollars(m)) de \(dollars(b))", reset: nil, window: nil))
+                                        value: "\(dollars(m)) de \(dollars(b))", reset: nil, window: nil,
+                                        shortLabel: "Mes", shortValue: dollars(m)))
             } else {
-                c.lines.append(CardLine(id: "mes", label: "Gastado este mes", percent: nil, value: dollars(m), reset: nil, window: nil))
+                c.lines.append(CardLine(id: "mes", label: "Gastado este mes", percent: nil, value: dollars(m), reset: nil, window: nil,
+                                        shortLabel: "Mes"))
             }
         }
         if w.available == nil, w.source == "Moni" {
@@ -1438,6 +1444,7 @@ struct LineView: View {
     let now: Date
     var k: CGFloat = 1
     var showReset = true
+    var short = false
 
     var pace: Double? {
         guard let r = line.reset, let w = line.window else { return nil }
@@ -1449,12 +1456,12 @@ struct LineView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4 * k) {
             HStack(alignment: .firstTextBaseline) {
-                Text(line.label)
+                Text(short ? (line.shortLabel ?? line.label) : line.label)
                     .font(.system(size: 11 * k, weight: .medium))
                     .foregroundColor(.white.opacity(0.75))
                     .lineLimit(1).minimumScaleFactor(0.7)
                 Spacer(minLength: 4)
-                Text(line.value)
+                Text(short ? (line.shortValue ?? line.value) : line.value)
                     .font(.system(size: (line.percent != nil && line.window != nil ? 17 : 13) * k, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundColor(line.percent.map { usageColor($0) } ?? .white.opacity(0.9))
@@ -1541,8 +1548,10 @@ struct WidgetView: View {
 
     var services: [Service] { settings.cfg.services }
     var z: CGFloat { CGFloat(settings.cfg.zoom) }
-    var controlsVertical: Bool { [.mini, .compacto, .horizontal].contains(settings.cfg.layout) }
-    var controlsAlignment: Alignment { controlsVertical ? .trailing : .topTrailing }
+    var controlsVertical: Bool { [.compacto, .horizontal].contains(settings.cfg.layout) }
+    var controlsAlignment: Alignment {
+        settings.cfg.layout == .mini ? .trailing : (controlsVertical ? .trailing : .topTrailing)
+    }
 
     func tint(_ level: Double?) -> Color {
         guard let l = level else { return Color(red: 0.45, green: 0.70, blue: 0.95) }
@@ -1604,11 +1613,11 @@ struct WidgetView: View {
                             .font(.system(size: 30 * k, weight: .bold, design: .rounded))
                             .monospacedDigit()
                             .foregroundColor(headColor(c))
-                            .lineLimit(1).minimumScaleFactor(0.6)
+                            .lineLimit(1).fixedSize()
                         Text(c.caption)
                             .font(.system(size: 10 * k, weight: .medium))
                             .foregroundColor(.white.opacity(0.55))
-                            .lineLimit(1)
+                            .lineLimit(2).minimumScaleFactor(0.8)
                     }
                 }
             }
@@ -1644,7 +1653,7 @@ struct WidgetView: View {
             }
             .padding(.vertical, 5 * z)
             .padding(.leading, 8 * z)
-            .padding(.trailing, 8 * z + 30)
+            .padding(.trailing, 8 * z + 86)
 
         case .compacto:
             VStack(alignment: .leading, spacing: 7 * z) {
@@ -1715,7 +1724,7 @@ struct WidgetView: View {
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                         VStack(alignment: .leading, spacing: 6 * z) {
-                            ForEach(c.lines) { LineView(line: $0, now: now, k: 0.85 * z, showReset: false) }
+                            ForEach(c.lines) { LineView(line: $0, now: now, k: 0.85 * z, showReset: false, short: true) }
                         }
                     }
                 }
