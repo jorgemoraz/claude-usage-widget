@@ -69,7 +69,7 @@ object Cards {
         val session = rows.firstOrNull { !it.isWeek }
         val week = rows.firstOrNull { it.isWeek }
         val lines = rows.map {
-            Line(if (it.isWeek) it.label else "5 horas", pct(it.percent), it.percent, resetNote(it.resetAt), usageColor(it.percent))
+            Line(if (!it.isWeek) "5 horas" else it.label.substringAfter("· "), pct(it.percent), it.percent, resetNote(it.resetAt), usageColor(it.percent))
         }
         return Card(
             s, true, rows.maxOf { it.percent },

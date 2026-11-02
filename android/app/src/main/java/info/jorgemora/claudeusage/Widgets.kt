@@ -118,20 +118,27 @@ object Widgets {
     }
 
     /** Celda compacta: personaje, nombre, dato grande y uno pequeño */
-    private fun compact(c: Context, card: Card, layout: Int, wide: Boolean): RemoteViews {
+    private fun compact(c: Context, card: Card, layout: Int, wide: Boolean, narrow: Boolean = false, showSmall: Boolean = true): RemoteViews {
         val v = RemoteViews(c.packageName, layout)
         sprite(c, v, card)
-        v.setTextViewText(R.id.name, if (wide) card.service.title else card.service.short)
+        fun tight(t: String) = if (narrow) t.replace(" %", "%").replace(" $", "$") else t
+        v.setTextViewText(R.id.name, when {
+            wide -> card.service.title
+            narrow || card.service.isAPI || !card.hasData -> card.service.short
+            else -> card.service.short + " · sem"
+        })
         v.setTextColor(R.id.name, card.service.color)
-        v.setTextViewText(R.id.big, card.big)
+        v.setTextViewText(R.id.big, tight(card.big))
         v.setTextColor(R.id.big, bigColor(card))
+        if (narrow) v.setTextViewTextSize(R.id.big, android.util.TypedValue.COMPLEX_UNIT_SP, 18f)
         val small = when {
             !card.hasData -> card.error ?: "sin datos"
-            card.service.isAPI -> if (wide && card.small.startsWith("mes")) "saldo · ${card.small}" else card.small
+            card.service.isAPI -> if (wide && card.small.startsWith("mes")) "saldo · ${card.small}" else tight(card.small)
             wide -> "semana · ${card.small}"
-            else -> "sem · ${card.small}"
+            else -> tight(card.small)
         }
         v.setTextViewText(R.id.small, small)
+        v.setViewVisibility(R.id.small, if (showSmall) View.VISIBLE else View.GONE)
         v.setTextColor(R.id.small, if (!card.hasData && card.error != null) 0xFFFFB366.toInt() else DIM)
         return v
     }
@@ -142,8 +149,10 @@ object Widgets {
         sprite(c, v, card)
         v.setTextViewText(R.id.name, card.service.title)
         v.setTextColor(R.id.name, card.service.color)
-        v.setTextViewText(R.id.phrase, if (wide) card.phrase() else "")
-        card.lines.take(maxLines).forEach { l ->
+        v.setTextViewText(R.id.phrase, if (wide && card.hasData) card.phrase() else "")
+        // Si solo cabe una línea, la que está más apurada
+        val shown = if (maxLines == 1 && !card.service.isAPI) listOfNotNull(card.lines.maxByOrNull { it.percent ?: 0.0 }) else card.lines.take(maxLines)
+        shown.forEach { l ->
             val r = RemoteViews(c.packageName, R.layout.line_row)
             r.setTextViewText(R.id.label, l.label)
             r.setTextViewText(R.id.value, l.value)
@@ -173,7 +182,8 @@ object Widgets {
             v = RemoteViews(c.packageName, R.layout.w_root_row)
             val fit = max(1, min(n, (w / 96).toInt()))
             val wide = w / fit >= 150
-            cards.take(fit).forEach { v.addView(R.id.cells, compact(c, it, R.layout.cell_col, wide)) }
+            val narrow = w / fit < 120
+            cards.take(fit).forEach { v.addView(R.id.cells, compact(c, it, R.layout.cell_col, wide, narrow)) }
             v.setTextViewText(R.id.footer, "…")
             v.setViewVisibility(R.id.footer, if (refreshing) View.VISIBLE else View.GONE)
         } else {
@@ -182,7 +192,7 @@ object Widgets {
             val per = avail / n
             when {
                 w >= 230 && per >= 56 -> {
-                    val lines = ((per - 22) / 22).toInt().coerceIn(1, 3)
+                    val lines = ((per - 18) / 21).toInt().coerceIn(1, 3)
                     cards.forEach { v.addView(R.id.cells, full(c, it, lines, w >= 300)) }
                 }
                 w >= 200 && n > 2 -> {
@@ -196,8 +206,9 @@ object Widgets {
                     }
                 }
                 else -> {
-                    val fit = max(1, min(n, (avail / 46).toInt()))
-                    cards.take(fit).forEach { v.addView(R.id.cells, compact(c, it, R.layout.cell_list, w >= 170)) }
+                    val fit = max(1, min(n, (avail / 40).toInt()))
+                    val showSmall = avail / fit >= 54
+                    cards.take(fit).forEach { v.addView(R.id.cells, compact(c, it, R.layout.cell_list, w >= 250, w < 140, showSmall)) }
                 }
             }
             val at = cards.maxOfOrNull { it.updated } ?: 0L
