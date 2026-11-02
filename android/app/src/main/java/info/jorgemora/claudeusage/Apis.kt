@@ -140,12 +140,13 @@ object OpenAI {
     private const val TOKEN = "openai_tok"
 
     /** JavaScript síncrono: busca el token de sesión que guarda la web */
-    const val TOKEN_JS = """(function(){var t=null;[window.localStorage,window.sessionStorage].forEach(function(st){for(var i=0;i<st.length;i++){var v=st.getItem(st.key(i))||'';if(v.indexOf('access_token')<0)continue;try{var o=JSON.parse(v);var c=(o&&o.body&&o.body.access_token)||(o&&o.access_token);if(c)t=c;}catch(e){}}});return t||'';})()"""
+    const val TOKEN_JS = """(function(){try{var o=JSON.parse(localStorage.getItem('oai-auth:onboard')||'null');if(o&&o.accessToken)return o.accessToken;}catch(e){}var t=null;[window.localStorage,window.sessionStorage].forEach(function(st){for(var i=0;i<st.length;i++){var v=st.getItem(st.key(i))||'';if(v.indexOf('access_token')<0)continue;try{var o=JSON.parse(v);var c=(o&&o.body&&o.body.access_token)||(o&&o.access_token);if(c)t=c;}catch(e){}}});return t||'';})()"""
 
     /** Para WebFetcher: obtiene el token dentro de la web (renovándolo si hace falta) */
     const val FETCH_JS = """
         let tok = null;
-        for (const st of [window.localStorage, window.sessionStorage]) {
+        try { const o = JSON.parse(localStorage.getItem('oai-auth:onboard') || 'null'); if (o && o.accessToken) tok = o.accessToken; } catch (e) {}
+        if (!tok) for (const st of [window.localStorage, window.sessionStorage]) {
           for (let i = 0; i < st.length; i++) {
             const v = st.getItem(st.key(i)) || '';
             if (v.indexOf('access_token') < 0) continue;
@@ -182,8 +183,20 @@ object OpenAI {
     private suspend fun query(c: Context): Int = withContext(Dispatchers.IO) {
         val t = Wallets.secret(c, TOKEN) ?: return@withContext 0
         try {
-            val h = mapOf("Authorization" to "Bearer $t")
-            val g = httpGet("https://api.openai.com/dashboard/billing/credit_grants", h)
+            // El token de la web se cambia por una clave de sesión del panel (sess-…)
+            val sess = runCatching {
+                val conn = URL("https://api.openai.com/v1/dashboard/onboarding/login").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"; conn.doOutput = true
+                conn.connectTimeout = 8000; conn.readTimeout = 15000
+                conn.setRequestProperty("Authorization", "Bearer $t")
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write("{}".toByteArray()) }
+                if (conn.responseCode != 200) { conn.disconnect(); return@runCatching null }
+                val j = JSONObject(conn.inputStream.bufferedReader().readText()); conn.disconnect()
+                j.optJSONObject("user")?.optJSONObject("session")?.optString("sensitive_id")?.takeIf { it.startsWith("sess-") }
+            }.getOrNull()
+            val h = mapOf("Authorization" to "Bearer ${sess ?: t}")
+            val g = httpGet("https://api.openai.com/v1/dashboard/billing/credit_grants", h)
             var w = Wallet(source = "OpenAI")
             if (g.status == 200) {
                 val o = JSONObject(g.body)
@@ -191,7 +204,7 @@ object OpenAI {
                     available = o.num("total_available") ?: o.num("total_paid_available"))
             }
             val today = LocalDate.now(ZoneOffset.UTC)
-            val u = httpGet("https://api.openai.com/dashboard/billing/usage?start_date=${today.withDayOfMonth(1)}&end_date=${today.plusDays(1)}", h)
+            val u = httpGet("https://api.openai.com/v1/dashboard/billing/usage?start_date=${today.withDayOfMonth(1)}&end_date=${today.plusDays(1)}", h)
             if (u.status == 200) JSONObject(u.body).num("total_usage")?.let { w = w.copy(month = it / 100) }
             if (w.available == null && w.month == null) return@withContext if (g.status == 200) 422 else g.status
             Wallets.save(c, KEY, w, null)

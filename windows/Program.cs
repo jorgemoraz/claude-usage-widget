@@ -504,7 +504,7 @@ namespace UsoDeClaude
     /// <summary>OpenAI no da el saldo con una clave de API: se lee con la sesión de platform.openai.com (vía no oficial)</summary>
     public static class OpenAI
     {
-        public const string TokenJS = @"(function(){var t=null;[window.localStorage,window.sessionStorage].forEach(function(st){for(var i=0;i<st.length;i++){var v=st.getItem(st.key(i))||'';if(v.indexOf('access_token')<0)continue;try{var o=JSON.parse(v);var c=(o&&o.body&&o.body.access_token)||(o&&o.access_token);if(c)t=c;}catch(e){}}});return t||'';})()";
+        public const string TokenJS = @"(function(){try{var o=JSON.parse(localStorage.getItem('oai-auth:onboard')||'null');if(o&&o.accessToken)return o.accessToken;}catch(e){}var t=null;[window.localStorage,window.sessionStorage].forEach(function(st){for(var i=0;i<st.length;i++){var v=st.getItem(st.key(i))||'';if(v.indexOf('access_token')<0)continue;try{var o=JSON.parse(v);var c=(o&&o.body&&o.body.access_token)||(o&&o.access_token);if(c)t=c;}catch(e){}}});return t||'';})()";
 
         const string JS = @"
             let tok = " + TokenJS + @";
@@ -512,14 +512,16 @@ namespace UsoDeClaude
               try { const s = await fetch('/api/auth/session', {credentials: 'include'}); if (s.status === 200) { const j = await s.json(); tok = j.accessToken || null; } } catch (e) {}
             }
             if (!tok) return {status: 401, body: ''};
-            const h = {'Authorization': 'Bearer ' + tok};
+            let sess = null;
+    try { const l = await fetch('https://api.openai.com/v1/dashboard/onboarding/login', {method: 'POST', headers: {'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json'}, body: '{}'}); if (l.status === 200) { const j = await l.json(); sess = j && j.user && j.user.session && j.user.session.sensitive_id; } } catch (e) {}
+    const h = {'Authorization': 'Bearer ' + (sess || tok)};
             let gs = 0, gb = '';
-            try { const g = await fetch('https://api.openai.com/dashboard/billing/credit_grants', {headers: h}); gs = g.status; gb = await g.text(); } catch (e) { gs = -1; }
+            try { const g = await fetch('https://api.openai.com/v1/dashboard/billing/credit_grants', {headers: h}); gs = g.status; gb = await g.text(); } catch (e) { gs = -1; }
             const d = new Date();
             const start = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-01';
             const end = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
             let ub = '';
-            try { const u = await fetch('https://api.openai.com/dashboard/billing/usage?start_date=' + start + '&end_date=' + end, {headers: h}); if (u.status === 200) ub = await u.text(); } catch (e) {}
+            try { const u = await fetch('https://api.openai.com/v1/dashboard/billing/usage?start_date=' + start + '&end_date=' + end, {headers: h}); if (u.status === 200) ub = await u.text(); } catch (e) {}
             return {status: gs, body: JSON.stringify({grants: gb, usage: ub})};";
 
         public static async Task<(Wallet w, string err)> Fetch()

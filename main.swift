@@ -793,6 +793,7 @@ final class PlatformSession: NSObject, WKNavigationDelegate {
     static let findToken = """
     const findTok = () => {
       let t = null;
+      try { const o = JSON.parse(localStorage.getItem('oai-auth:onboard') || 'null'); if (o && o.accessToken) return o.accessToken; } catch (e) {}
       for (const st of [window.localStorage, window.sessionStorage]) {
         for (let i = 0; i < st.length; i++) {
           const v = st.getItem(st.key(i)) || '';
@@ -810,14 +811,16 @@ final class PlatformSession: NSObject, WKNavigationDelegate {
 
     static let walletJS = findToken + """
     if (!tok) return {status: 401, grants: '', usage: ''};
-    const h = {'Authorization': 'Bearer ' + tok};
+    let sess = null;
+    try { const l = await fetch('https://api.openai.com/v1/dashboard/onboarding/login', {method: 'POST', headers: {'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json'}, body: '{}'}); if (l.status === 200) { const j = await l.json(); sess = j && j.user && j.user.session && j.user.session.sensitive_id; } } catch (e) {}
+    const h = {'Authorization': 'Bearer ' + (sess || tok)};
     let gs = 0, gb = '';
-    try { const g = await fetch('https://api.openai.com/dashboard/billing/credit_grants', {headers: h}); gs = g.status; gb = await g.text(); } catch (e) { gs = -1; gb = String(e); }
+    try { const g = await fetch('https://api.openai.com/v1/dashboard/billing/credit_grants', {headers: h}); gs = g.status; gb = await g.text(); } catch (e) { gs = -1; gb = String(e); }
     const d = new Date();
     const start = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-01';
     const end = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
     let ub = '';
-    try { const u = await fetch('https://api.openai.com/dashboard/billing/usage?start_date=' + start + '&end_date=' + end, {headers: h}); if (u.status === 200) ub = await u.text(); } catch (e) {}
+    try { const u = await fetch('https://api.openai.com/v1/dashboard/billing/usage?start_date=' + start + '&end_date=' + end, {headers: h}); if (u.status === 200) ub = await u.text(); } catch (e) {}
     return {status: gs, grants: gb, usage: ub};
     """
 
