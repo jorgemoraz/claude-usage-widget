@@ -1036,7 +1036,7 @@ namespace UsoDeClaude
                 default:
                     {
                         var large = lay == "grande";
-                        var sp = new StackPanel { Margin = new Thickness(16, 12, 16, 10), Width = large ? 490 : 420 };
+                        var sp = new StackPanel { Margin = new Thickness(16, 12, 16, 10), Width = large ? 520 : 460 };
                         foreach (var c in cards) sp.Children.Add(Full(c, large));
                         sp.Children.Add(Footer());
                         body = sp; break;

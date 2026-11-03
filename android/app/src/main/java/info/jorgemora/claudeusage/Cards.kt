@@ -77,7 +77,7 @@ object Cards {
         val week = rows.firstOrNull { it.isWeek }
         val lines = rows.map {
             Line(if (!it.isWeek) "5 horas" else it.label.substringAfter("· "), pct(it.percent), it.percent,
-                timeLeft(it.resetAt, it.windowSec)?.let { t -> "tiempo ${(t * 100).roundToInt()} % · ${resetNote(it.resetAt)}" } ?: resetNote(it.resetAt),
+                timeLeft(it.resetAt, it.windowSec)?.let { t -> "⏱ ${(t * 100).roundToInt()} % · ${hourText(it.resetAt!!)}" } ?: resetNote(it.resetAt),
                 usageColor(it.percent), timeLeft(it.resetAt, it.windowSec))
         }
         return Card(
