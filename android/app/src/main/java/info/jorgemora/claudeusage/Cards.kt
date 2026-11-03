@@ -15,7 +15,14 @@ enum class Service(val key: String, val title: String, val short: String, val sp
 }
 
 /** Una línea de una tarjeta: etiqueta, valor, barra (0–100) y cuándo se reinicia */
-data class Line(val label: String, val value: String, val percent: Double?, val note: String, val color: Int)
+/** percent = usado (0–100); la barra pinta lo que queda. timeLeft = fracción de tiempo hasta el reinicio. */
+data class Line(val label: String, val value: String, val percent: Double?, val note: String, val color: Int, val timeLeft: Double? = null)
+
+fun timeLeft(resetAt: Long?, windowSec: Long): Double? {
+    if (resetAt == null || windowSec <= 0) return null
+    val left = (resetAt - System.currentTimeMillis()) / 1000.0
+    return if (left > 0) (left / windowSec).coerceAtMost(1.0) else null
+}
 
 /** Lo que se pinta de un servicio, igual en todos los formatos */
 data class Card(
@@ -69,7 +76,9 @@ object Cards {
         val session = rows.firstOrNull { !it.isWeek }
         val week = rows.firstOrNull { it.isWeek }
         val lines = rows.map {
-            Line(if (!it.isWeek) "5 horas" else it.label.substringAfter("· "), pct(it.percent), it.percent, resetNote(it.resetAt), usageColor(it.percent))
+            Line(if (!it.isWeek) "5 horas" else it.label.substringAfter("· "), pct(it.percent), it.percent,
+                timeLeft(it.resetAt, it.windowSec)?.let { t -> "tiempo ${(t * 100).roundToInt()} % · ${resetNote(it.resetAt)}" } ?: resetNote(it.resetAt),
+                usageColor(it.percent), timeLeft(it.resetAt, it.windowSec))
         }
         return Card(
             s, true, rows.maxOf { it.percent },
@@ -88,7 +97,7 @@ object Cards {
         val level = w.level
         if (w.available != null) {
             val total = w.granted?.let { " de ${dollars(it)}" } ?: ""
-            lines += Line("Saldo", dollars(w.available), level?.let { 100 - it }, "queda$total",
+            lines += Line("Saldo", dollars(w.available), level, "queda$total",
                 level?.let { usageColor(it) } ?: 0xFF5CCC80.toInt())
         }
         if (w.used != null && w.available != null) lines += Line("Gastado", dollars(w.used), null, "del saldo cargado", DIM)

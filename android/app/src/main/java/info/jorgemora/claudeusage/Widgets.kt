@@ -159,10 +159,16 @@ object Widgets {
             r.setTextViewText(R.id.value, l.value)
             r.setTextColor(R.id.value, if (l.percent != null) l.color else 0xFFFFFFFF.toInt())
             if (l.percent != null) {
-                r.setProgressBar(R.id.bar, 100, l.percent.roundToInt().coerceIn(0, 100), false)
+                // Batería: lo que queda de uso
+                r.setProgressBar(R.id.bar, 100, (100 - l.percent).roundToInt().coerceIn(0, 100), false)
                 if (Build.VERSION.SDK_INT >= 31) r.setColorStateList(R.id.bar, "setProgressTintList", ColorStateList.valueOf(l.color))
                 r.setViewVisibility(R.id.bar, View.VISIBLE)
             } else r.setViewVisibility(R.id.bar, View.INVISIBLE)
+            // Debajo, en la misma escala, el tiempo que queda hasta el reinicio
+            if (l.timeLeft != null) {
+                r.setProgressBar(R.id.bar_time, 100, (l.timeLeft * 100).roundToInt().coerceIn(0, 100), false)
+                r.setViewVisibility(R.id.bar_time, View.VISIBLE)
+            } else r.setViewVisibility(R.id.bar_time, View.GONE)
             r.setTextViewText(R.id.note, if (wide) l.note else "")
             v.addView(R.id.lines, r)
         }

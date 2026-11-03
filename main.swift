@@ -1437,31 +1437,39 @@ final class PanelSettings: ObservableObject {
 
 // MARK: Barras y líneas
 
+/// Barra tipo batería: lo que QUEDA. Debajo, una línea fina con el tiempo que queda hasta el reinicio,
+/// en la misma escala, para comparar de un vistazo: si la barra de uso es más corta que la del tiempo, vas rápido.
 struct UsageBar: View {
-    let percent: Double
-    let pace: Double?
+    let percent: Double        // usado (0–100)
+    let timeLeft: Double?      // fracción de tiempo que queda hasta el reinicio (0–1)
     var height: CGFloat = 7
 
     var body: some View {
-        GeometryReader { g in
-            let c = usageColor(percent)
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.10))
-                Capsule()
-                    .fill(LinearGradient(colors: [c.opacity(0.65), c], startPoint: .leading, endPoint: .trailing))
-                    .frame(width: percent > 0 ? max(height, g.size.width * CGFloat(min(percent, 100) / 100)) : 0)
-                    .shadow(color: c.opacity(0.55), radius: percent >= 85 ? 4 : 0)
-                if let pace = pace {
-                    // Marca de ritmo: dónde irías si repartieras el consumo de forma uniforme
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(Color.white.opacity(0.85))
-                        .frame(width: 2, height: g.size.height + 4)
-                        .offset(x: g.size.width * CGFloat(pace) - 1)
+        let left = max(0, min(100, 100 - percent))
+        VStack(alignment: .leading, spacing: max(2, height * 0.35)) {
+            GeometryReader { g in
+                let c = usageColor(percent)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.10))
+                    Capsule()
+                        .fill(LinearGradient(colors: [c.opacity(0.65), c], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: left > 0 ? max(height, g.size.width * CGFloat(left / 100)) : 0)
+                        .shadow(color: c.opacity(0.55), radius: percent >= 85 ? 4 : 0)
                 }
+                .animation(.spring(response: 0.9, dampingFraction: 0.75), value: percent)
             }
-            .animation(.spring(response: 0.9, dampingFraction: 0.75), value: percent)
+            .frame(height: height)
+            if let t = timeLeft {
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.07))
+                        Capsule().fill(Color(red: 0.55, green: 0.75, blue: 1).opacity(0.85))
+                            .frame(width: max(2, g.size.width * CGFloat(t)))
+                    }
+                }
+                .frame(height: max(2, height * 0.4))
+            }
         }
-        .frame(height: height)
     }
 }
 
@@ -1472,11 +1480,12 @@ struct LineView: View {
     var showReset = true
     var short = false
 
-    var pace: Double? {
-        guard let r = line.reset, let w = line.window else { return nil }
+    /// Fracción de tiempo que queda hasta el reinicio
+    var timeLeft: Double? {
+        guard let r = line.reset, let w = line.window, w > 0 else { return nil }
         let left = r.timeIntervalSince(now)
-        guard left > 0, left <= w else { return nil }
-        return 1 - left / w
+        guard left > 0 else { return nil }
+        return min(1, left / w)
     }
 
     var body: some View {
@@ -1493,7 +1502,13 @@ struct LineView: View {
                     .foregroundColor(line.percent.map { usageColor($0) } ?? .white.opacity(0.9))
                     .lineLimit(1).minimumScaleFactor(0.7)
             }
-            if let p = line.percent { UsageBar(percent: p, pace: pace, height: 6 * k) }
+            if let p = line.percent { UsageBar(percent: p, timeLeft: timeLeft, height: 6 * k) }
+            if showReset, let p = line.percent, let t = timeLeft {
+                Text("Quedan \(Int((100 - p).rounded())) % de uso y \(Int((t * 100).rounded())) % de tiempo")
+                    .font(.system(size: 10 * k, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(1).minimumScaleFactor(0.7)
+            }
             if showReset, let r = line.reset {
                 Text(resetText(r, now: now))
                     .font(.system(size: 10 * k))

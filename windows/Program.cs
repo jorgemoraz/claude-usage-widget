@@ -573,7 +573,8 @@ namespace UsoDeClaude
         };
     }
 
-    public record Line(string Label, string Value, double? Percent, string Note, Color Color);
+    /// <summary>Percent = usado (0–100); la barra pinta lo que queda. TimeLeft = fracción de tiempo hasta el reinicio.</summary>
+    public record Line(string Label, string Value, double? Percent, string Note, Color Color, double? TimeLeft = null);
 
     public class Card
     {
@@ -651,8 +652,10 @@ namespace UsoDeClaude
             foreach (var r in rows)
             {
                 var note = r.ResetAt == null ? "" : r.ResetAt > DateTimeOffset.Now ? "vuelve " + Util.HourText(r.ResetAt.Value) : "reiniciado";
+                double? tl = r.ResetAt != null && r.ResetAt > DateTimeOffset.Now && r.WindowSec > 0 ? Math.Min(1, (r.ResetAt.Value - DateTimeOffset.Now).TotalSeconds / r.WindowSec) : null;
+                if (tl != null) note = $"tiempo {Math.Round(tl.Value * 100)} % · " + note;
                 var label = !r.IsWeek ? "5 horas" : r.Label.Contains("· ") ? r.Label[(r.Label.IndexOf("· ") + 2)..] : r.Label;
-                c.Lines.Add(new Line(label, Pct(r.Percent), r.Percent, note, Util.UsageColor(r.Percent)));
+                c.Lines.Add(new Line(label, Pct(r.Percent), r.Percent, note, Util.UsageColor(r.Percent), tl));
             }
             return c;
         }
@@ -665,7 +668,7 @@ namespace UsoDeClaude
             c.Level = w.Level;
             var dim = System.Windows.Media.Color.FromArgb(140, 255, 255, 255);
             if (w.Available != null)
-                c.Lines.Add(new Line("Saldo", Dollars(w.Available.Value), c.Level != null ? 100 - c.Level : null,
+                c.Lines.Add(new Line("Saldo", Dollars(w.Available.Value), c.Level,
                     "queda" + (w.Granted != null ? " de " + Dollars(w.Granted.Value) : ""), c.Level != null ? Util.UsageColor(c.Level.Value) : System.Windows.Media.Color.FromRgb(0x5C, 0xCC, 0x80)));
             if (w.Used != null && w.Available != null) c.Lines.Add(new Line("Gastado", Dollars(w.Used.Value), null, "del saldo cargado", dim));
             if (w.Month != null)
@@ -908,14 +911,27 @@ namespace UsoDeClaude
 
         static Color BigColor(Card c) => !c.HasData ? Wa(140) : c.Level != null ? Util.UsageColor(c.Level.Value) : Colors.White;
 
-        static UIElement Bar(double p, Color c)
+        /// <summary>Barra tipo batería (lo que queda) y, debajo, en la misma escala, el tiempo que queda hasta el reinicio</summary>
+        static UIElement Bar(double used, Color c, double? timeLeft)
         {
-            var g = new Grid { Height = 7, VerticalAlignment = VerticalAlignment.Center };
+            var left = Math.Clamp(100 - used, 0, 100);
+            var sp = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            var g = new Grid { Height = 7 };
             g.Children.Add(new Border { CornerRadius = new CornerRadius(4), Background = new SolidColorBrush(Wa(26)) });
             var fill = new Border { CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Left, Background = new LinearGradientBrush(Color.FromArgb(170, c.R, c.G, c.B), c, 0) };
-            g.SizeChanged += (_, e) => fill.Width = Math.Max(p > 0 ? 7 : 0, e.NewSize.Width * Math.Clamp(p, 0, 100) / 100);
+            g.SizeChanged += (_, e) => fill.Width = Math.Max(left > 0 ? 7 : 0, e.NewSize.Width * left / 100);
             g.Children.Add(fill);
-            return g;
+            sp.Children.Add(g);
+            if (timeLeft != null)
+            {
+                var t = new Grid { Height = 3, Margin = new Thickness(0, 2, 0, 0) };
+                t.Children.Add(new Border { CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Wa(18)) });
+                var tf = new Border { CornerRadius = new CornerRadius(2), HorizontalAlignment = HorizontalAlignment.Left, Background = new SolidColorBrush(Color.FromArgb(217, 0x8C, 0xBF, 0xFF)) };
+                t.SizeChanged += (_, e) => tf.Width = Math.Max(2, e.NewSize.Width * timeLeft.Value);
+                t.Children.Add(tf);
+                sp.Children.Add(t);
+            }
+            return sp;
         }
 
         /// <summary>Celda compacta: personaje, nombre, dato grande y otro pequeño</summary>
@@ -953,13 +969,13 @@ namespace UsoDeClaude
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(70) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(large ? 86 : 74) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 50 });
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(large ? 130 : 108) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(large ? 170 : 150) });
                 var lab = Txt(l.Label, 12, Wa(185), FontWeights.Medium); lab.VerticalAlignment = VerticalAlignment.Center;
                 var val = Txt(l.Value, large ? 21 : 18, l.Percent != null ? l.Color : Colors.White, FontWeights.Bold);
                 var note = Txt(l.Note, 10.5, Wa(130)); note.VerticalAlignment = VerticalAlignment.Center; note.HorizontalAlignment = HorizontalAlignment.Right;
                 Grid.SetColumn(val, 1); Grid.SetColumn(note, 3);
                 row.Children.Add(lab); row.Children.Add(val); row.Children.Add(note);
-                if (l.Percent != null) { var b = Bar(l.Percent.Value, l.Color); Grid.SetColumn(b, 2); ((FrameworkElement)b).Margin = new Thickness(4, 0, 10, 0); row.Children.Add(b); }
+                if (l.Percent != null) { var b = Bar(l.Percent.Value, l.Color, l.TimeLeft); Grid.SetColumn(b, 2); ((FrameworkElement)b).Margin = new Thickness(4, 0, 10, 0); row.Children.Add(b); }
                 col.Children.Add(row);
             }
             if (!c.HasData || c.Error != null)
@@ -1020,7 +1036,7 @@ namespace UsoDeClaude
                 default:
                     {
                         var large = lay == "grande";
-                        var sp = new StackPanel { Margin = new Thickness(16, 12, 16, 10), Width = large ? 440 : 380 };
+                        var sp = new StackPanel { Margin = new Thickness(16, 12, 16, 10), Width = large ? 490 : 420 };
                         foreach (var c in cards) sp.Children.Add(Full(c, large));
                         sp.Children.Add(Footer());
                         body = sp; break;
