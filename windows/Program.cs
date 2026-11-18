@@ -39,7 +39,7 @@ namespace UsoDeClaude
     public class PanelConfig
     {
         public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
-        public List<string> Services { get; set; } = new() { "claude", "gpt", "openai", "soniox" };
+        public List<string> Services { get; set; } = new() { "claude", "gpt", "openai", "soniox", "elevenlabs" };
         public string Layout { get; set; } = "normal";
         public double Zoom { get; set; } = 1;
         public double X { get; set; } = double.NaN;
@@ -64,6 +64,7 @@ namespace UsoDeClaude
         public List<PanelConfig> Panels { get; set; }
         public List<string> Tray { get; set; } = new() { "claude", "gpt" };
         public bool OpenAISession { get; set; }
+        public bool AddedEleven { get; set; }
 
         public static string Dir => IOPath.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UsoDeClaude");
         static string FilePath => IOPath.Combine(Dir, "ajustes.json");
@@ -501,6 +502,41 @@ namespace UsoDeClaude
         }
     }
 
+    /// <summary>ElevenLabs: créditos del plan con su API oficial (clave con lectura de «User»)</summary>
+    public static class Eleven
+    {
+        static readonly System.Globalization.CultureInfo Es = new("es-ES");
+        static string N(double v) => v >= 1_000_000 ? (v / 1_000_000).ToString("0.0", Es) + " M" : v.ToString("N0", Es);
+
+        public static async Task<(List<Row> rows, string extra, string err)> Fetch()
+        {
+            var k = Secret.Read("elevenlabs");
+            if (k == null) return (null, null, "Falta la clave de ElevenLabs: clic derecho › Clave de la API de ElevenLabs…");
+            try
+            {
+                var req = new HttpRequestMessage(HttpMethod.Get, "https://api.elevenlabs.io/v1/user/subscription");
+                req.Headers.Add("xi-api-key", k);
+                var r = await Util.Http.SendAsync(req);
+                var body = await r.Content.ReadAsStringAsync();
+                var code = (int)r.StatusCode;
+                if (code == 401 || code == 403) return (null, null, "ElevenLabs no acepta la clave (necesita lectura de «User»)");
+                if (code != 200) return (null, null, $"ElevenLabs respondió {code}");
+                using var d = JsonDocument.Parse(body);
+                var used = Util.Num(d.RootElement, "character_count");
+                var limit = Util.Num(d.RootElement, "character_limit");
+                if (used == null || limit == null) return (null, null, "Respuesta inesperada de ElevenLabs");
+                var resetUnix = Util.Num(d.RootElement, "next_character_count_reset_unix");
+                var period = Util.Str(d.RootElement, "character_refresh_period") ?? Util.Str(d.RootElement, "billing_period") ?? "";
+                var days = period.StartsWith("3_") ? 91 : period.StartsWith("6_") ? 182 : period.StartsWith("annual") ? 365 : 30;
+                var p = limit > 0 ? Math.Clamp(100 * used.Value / limit.Value, 0, 100) : 0;
+                DateTimeOffset? reset = resetUnix != null ? DateTimeOffset.FromUnixTimeSeconds((long)resetUnix.Value).ToLocalTime() : null;
+                return (new List<Row> { new Row("Créditos", p, reset, days * 86400.0) },
+                        $"quedan {N(Math.Max(0, limit.Value - used.Value))} de {N(limit.Value)}", null);
+            }
+            catch { return (null, null, "Sin respuesta de ElevenLabs"); }
+        }
+    }
+
     /// <summary>OpenAI no da el saldo con una clave de API: se lee con la sesión de platform.openai.com (vía no oficial)</summary>
     public static class OpenAI
     {
@@ -553,22 +589,23 @@ namespace UsoDeClaude
 
     // ───────────────────────── Servicios, datos y tarjetas ─────────────────────────
 
-    public enum Svc { Claude, ChatGPT, OpenAI, Soniox }
+    public enum Svc { Claude, ChatGPT, OpenAI, Soniox, Eleven }
 
     public static class SvcInfo
     {
-        public static readonly Svc[] All = { Svc.Claude, Svc.ChatGPT, Svc.OpenAI, Svc.Soniox };
-        public static string Key(Svc s) => s switch { Svc.Claude => "claude", Svc.ChatGPT => "gpt", Svc.OpenAI => "openai", _ => "soniox" };
+        public static readonly Svc[] All = { Svc.Claude, Svc.ChatGPT, Svc.OpenAI, Svc.Soniox, Svc.Eleven };
+        public static string Key(Svc s) => s switch { Svc.Claude => "claude", Svc.ChatGPT => "gpt", Svc.OpenAI => "openai", Svc.Eleven => "elevenlabs", _ => "soniox" };
         public static Svc? From(string k) => All.Cast<Svc?>().FirstOrDefault(s => Key(s.Value) == k);
-        public static string Title(Svc s) => s switch { Svc.Claude => "Claude", Svc.ChatGPT => "ChatGPT", Svc.OpenAI => "API OpenAI", _ => "API Soniox" };
-        public static string Short(Svc s) => s switch { Svc.Claude => "Claude", Svc.ChatGPT => "GPT", Svc.OpenAI => "OpenAI", _ => "Soniox" };
-        public static string Sprite(Svc s) => s switch { Svc.Claude => "claude", Svc.Soniox => "soniox", _ => "chatgpt" };
+        public static string Title(Svc s) => s switch { Svc.Claude => "Claude", Svc.ChatGPT => "ChatGPT", Svc.OpenAI => "API OpenAI", Svc.Eleven => "ElevenLabs", _ => "API Soniox" };
+        public static string Short(Svc s) => s switch { Svc.Claude => "Claude", Svc.ChatGPT => "GPT", Svc.OpenAI => "OpenAI", Svc.Eleven => "11Labs", _ => "Soniox" };
+        public static string Sprite(Svc s) => s switch { Svc.Claude => "claude", Svc.Soniox => "soniox", Svc.Eleven => "elevenlabs", _ => "chatgpt" };
         public static bool IsAPI(Svc s) => s == Svc.OpenAI || s == Svc.Soniox;
         public static Color Color(Svc s) => s switch
         {
             Svc.Claude => System.Windows.Media.Color.FromRgb(0xE3, 0x87, 0x6A),
             Svc.ChatGPT => System.Windows.Media.Color.FromRgb(0x4D, 0xC7, 0x9E),
             Svc.OpenAI => System.Windows.Media.Color.FromRgb(0x7F, 0xD6, 0xB8),
+            Svc.Eleven => System.Windows.Media.Color.FromRgb(0xA8, 0x85, 0xFF),
             _ => System.Windows.Media.Color.FromRgb(0x6F, 0xA8, 0xFF)
         };
     }
@@ -598,7 +635,8 @@ namespace UsoDeClaude
     public static class Data
     {
         public static List<Row> Claude = new(), Gpt = new();
-        public static string ClaudeErr, GptErr, OpenAIErr, SonioxErr;
+        public static string ClaudeErr, GptErr, OpenAIErr, SonioxErr, ElevenErr, ElevenExtra;
+        public static List<Row> ElevenRows = new();
         public static Wallet OpenAIW, SonioxW;
         public static DateTimeOffset? Updated;
         public static bool Loading, NeedClaudeLogin, Sample;
@@ -625,6 +663,8 @@ namespace UsoDeClaude
                 if (force || DateTimeOffset.Now - lastApis > TimeSpan.FromMinutes(10))
                 {
                     lastApis = DateTimeOffset.Now;
+                    var e = await Eleven.Fetch();
+                    if (e.rows != null) { ElevenRows = e.rows; ElevenExtra = e.extra; ElevenErr = null; } else ElevenErr = e.err;
                     var s = await Soniox.Fetch();
                     if (s.w != null) { SonioxW = s.w; SonioxErr = null; } else SonioxErr = s.err;
                     var o = await global::UsoDeClaude.OpenAI.Fetch();
@@ -635,9 +675,16 @@ namespace UsoDeClaude
             finally { Loading = false; Notify(); }
         }
 
-        public static Card Card(Svc s) => SvcInfo.IsAPI(s)
+        public static Card Card(Svc s) => s == Svc.Eleven ? ElevenCard() : SvcInfo.IsAPI(s)
             ? Api(s, s == Svc.OpenAI ? OpenAIW : SonioxW, s == Svc.OpenAI ? OpenAIErr : SonioxErr)
             : Sub(s, s == Svc.Claude ? Claude : Gpt, s == Svc.Claude ? ClaudeErr : GptErr);
+
+        static Card ElevenCard()
+        {
+            var c = Sub(Svc.Eleven, ElevenRows, ElevenErr);
+            if (c.HasData) c.Small = ElevenExtra ?? "créditos";
+            return c;
+        }
 
         static Card Sub(Svc s, List<Row> rows, string err)
         {
@@ -687,6 +734,8 @@ namespace UsoDeClaude
             Gpt = new() { new Row("Sesión (5 h)", 8, now.AddHours(4), 18000), new Row("Semana", 92, now.AddDays(1), 604800) };
             OpenAIW = new Wallet(7.4, 12.6, 20, 3.2, null, "OpenAI");
             SonioxErr = "Falta la clave de Soniox: clic derecho › Clave de la API de Soniox…";
+            ElevenRows = new() { new Row("Créditos", 61, now.AddDays(12), 30 * 86400) };
+            ElevenExtra = "quedan 38.750 de 100.000";
             Updated = now;
         }
     }
@@ -940,7 +989,7 @@ namespace UsoDeClaude
             var sp = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4, 2, 10, 2) };
             sp.Children.Add(Sprite(c, sprite));
             var col = new StackPanel { Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, MaxWidth = 150 };
-            col.Children.Add(Txt(SvcInfo.IsAPI(c.S) || !c.HasData ? SvcInfo.Short(c.S) : SvcInfo.Short(c.S) + " · semana", 11, SvcInfo.Color(c.S), FontWeights.Bold));
+            col.Children.Add(Txt(SvcInfo.IsAPI(c.S) || !c.HasData || c.S == Svc.Eleven ? SvcInfo.Short(c.S) : SvcInfo.Short(c.S) + " · semana", 11, SvcInfo.Color(c.S), FontWeights.Bold));
             col.Children.Add(Txt(c.Big, big, BigColor(c), FontWeights.Bold));
             col.Children.Add(Txt(!c.HasData ? (c.Error ?? "sin datos") : c.Small, 11, !c.HasData && c.Error != null ? Warn : Wa(150)));
             sp.Children.Add(col);
@@ -1162,8 +1211,15 @@ namespace UsoDeClaude
                 st.Panels = new() { new PanelConfig
                 {
                     X = st.X, Y = st.Y, Zoom = st.Zoom, Hidden = st.Minimized,
-                    Services = st.ShowGpt ? new() { "claude", "gpt", "openai", "soniox" } : new() { "claude", "openai", "soniox" }
+                    Services = st.ShowGpt ? new() { "claude", "gpt", "openai", "soniox", "elevenlabs" } : new() { "claude", "openai", "soniox", "elevenlabs" }
                 } };
+                st.Save();
+            }
+            // Una vez: ElevenLabs aparece en los widgets que ya mostraban las APIs
+            if (!st.AddedEleven)
+            {
+                st.AddedEleven = true;
+                foreach (var c in st.Panels) if (c.Services.Contains("soniox") && !c.Services.Contains("elevenlabs")) c.Services.Add("elevenlabs");
                 st.Save();
             }
             foreach (var c in st.Panels) Open(c);
@@ -1243,6 +1299,11 @@ namespace UsoDeClaude
             _ = Data.Refresh(true);
         }).Show();
 
+        public static void ElevenKey() => new KeyWindow("API de ElevenLabs",
+            "Crea una clave en elevenlabs.io › Developers › API Keys con permiso de lectura en «User». Solo se usa para leer los créditos y se guarda cifrada en este ordenador.",
+            k => { Secret.Save("elevenlabs", k); _ = Data.Refresh(true); },
+            Secret.Read("elevenlabs") != null ? () => { Secret.Delete("elevenlabs"); Data.ElevenRows = new(); _ = Data.Refresh(true); } : null).Show();
+
         public static void SonioxKey() => new KeyWindow("API de Soniox",
             "Pega una clave de organización de Soniox (empieza por snx_org_): console.soniox.com › Settings › Organization API keys. Las de proyecto (snx_proj_) no dan acceso al saldo. Solo se usa para leer el saldo y el gasto, y se guarda cifrada en este ordenador.",
             k => { Secret.Save("soniox", k); _ = Data.Refresh(true); },
@@ -1255,6 +1316,7 @@ namespace UsoDeClaude
             item("Iniciar sesión en ChatGPT…", LoginGpt);
             item("Iniciar sesión en OpenAI (saldo de la API)…", LoginOpenAI);
             item("Clave de la API de Soniox…", SonioxKey);
+            item("Clave de la API de ElevenLabs…", ElevenKey);
             var bar = new MenuItem { Header = "En la barra de tareas" };
             foreach (var s in SvcInfo.All)
             {
@@ -1283,6 +1345,7 @@ namespace UsoDeClaude
             m.Items.Add("Iniciar sesión en ChatGPT…", null, (_, __) => LoginGpt());
             m.Items.Add("Iniciar sesión en OpenAI…", null, (_, __) => LoginOpenAI());
             m.Items.Add("Clave de la API de Soniox…", null, (_, __) => SonioxKey());
+            m.Items.Add("Clave de la API de ElevenLabs…", null, (_, __) => ElevenKey());
             m.Items.Add(new System.Windows.Forms.ToolStripSeparator());
             m.Items.Add("Salir", null, (_, __) => Quit());
             return m;

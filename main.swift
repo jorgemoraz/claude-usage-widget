@@ -777,6 +777,46 @@ enum SonioxAPI {
     }
 }
 
+/// ElevenLabs: créditos del plan (usados, límite y reinicio) con su API oficial
+struct ElevenCredits: Equatable {
+    var used: Double
+    var limit: Double
+    var resetAt: Date?
+    var window: TimeInterval
+    var tier: String
+    var percent: Double { limit > 0 ? min(100, max(0, 100 * used / limit)) : 0 }
+}
+
+enum ElevenAPI {
+    static let account = "elevenlabs"
+    static var key: String? { Secret.read(account) }
+
+    static func fetch(_ done: @escaping (Result<ElevenCredits, Error>) -> Void) {
+        guard let k = key else { return done(.failure(APIError.noKey("ElevenLabs"))) }
+        var req = URLRequest(url: URL(string: "https://api.elevenlabs.io/v1/user/subscription")!,
+                             cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        req.setValue(k, forHTTPHeaderField: "xi-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req) { data, resp, err in
+            if let err = err { return done(.failure(err)) }
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard code == 200, let data = data,
+                  let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let used = dnum(o["character_count"]), let limit = dnum(o["character_limit"]) else {
+                if code == 401 || code == 403 {
+                    return done(.failure(APIError.http("ElevenLabs (la clave necesita permiso de lectura de «User»)", code)))
+                }
+                return done(.failure(code == 200 ? APIError.badData("ElevenLabs") : APIError.http("ElevenLabs", code)))
+            }
+            let reset = dnum(o["next_character_count_reset_unix"]).map { Date(timeIntervalSince1970: $0) }
+            let period = (o["character_refresh_period"] as? String) ?? (o["billing_period"] as? String) ?? "monthly_period"
+            let days: Double = period.hasPrefix("3_") ? 91 : period.hasPrefix("6_") ? 182 : period.hasPrefix("annual") ? 365 : 30
+            done(.success(ElevenCredits(used: used, limit: limit, resetAt: reset, window: days * 86400,
+                                        tier: (o["tier"] as? String) ?? "")))
+        }.resume()
+    }
+}
+
 /// OpenAI no da el saldo con una clave de API: se lee desde una sesión de platform.openai.com
 /// iniciada dentro de la app (lo mismo que ve la página de facturación). Es una vía no oficial.
 final class PlatformSession: NSObject, WKNavigationDelegate {
@@ -959,6 +999,8 @@ final class UsageModel: ObservableObject {
     @Published var openaiError: String?
     @Published var soniox: Wallet?
     @Published var sonioxError: String?
+    @Published var eleven: ElevenCredits?
+    @Published var elevenError: String?
 
     var onChange: (() -> Void)?
     private var timer: Timer?
@@ -996,6 +1038,15 @@ final class UsageModel: ObservableObject {
     func refreshAPIs(force: Bool = false) {
         guard force || Date().timeIntervalSince(lastAPIFetch) > 590 else { return }
         lastAPIFetch = Date()
+        ElevenAPI.fetch { r in
+            DispatchQueue.main.async {
+                switch r {
+                case .success(let c): self.eleven = c; self.elevenError = nil
+                case .failure(let e): self.elevenError = e.localizedDescription
+                }
+                self.onChange?()
+            }
+        }
         SonioxAPI.fetch { r in
             DispatchQueue.main.async {
                 switch r {
@@ -1175,7 +1226,7 @@ struct GlassBackground: NSViewRepresentable {
 // MARK: - Servicios
 
 enum Service: String, CaseIterable, Codable, Identifiable {
-    case claude, chatgpt, openai, soniox
+    case claude, chatgpt, openai, soniox, elevenlabs
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -1183,6 +1234,7 @@ enum Service: String, CaseIterable, Codable, Identifiable {
         case .chatgpt: return "ChatGPT"
         case .openai: return "API OpenAI"
         case .soniox: return "API Soniox"
+        case .elevenlabs: return "ElevenLabs"
         }
     }
     var short: String {
@@ -1191,6 +1243,7 @@ enum Service: String, CaseIterable, Codable, Identifiable {
         case .chatgpt: return "GPT"
         case .openai: return "OpenAI"
         case .soniox: return "Soniox"
+        case .elevenlabs: return "11Labs"
         }
     }
     var sprite: String {
@@ -1198,6 +1251,7 @@ enum Service: String, CaseIterable, Codable, Identifiable {
         case .claude: return "claude"
         case .chatgpt, .openai: return "chatgpt"
         case .soniox: return "soniox"
+        case .elevenlabs: return "elevenlabs"
         }
     }
     var isAPI: Bool { self == .openai || self == .soniox }
@@ -1206,6 +1260,7 @@ enum Service: String, CaseIterable, Codable, Identifiable {
         case .claude: return NSColor(red: 0.96, green: 0.52, blue: 0.30, alpha: 1)
         case .chatgpt, .openai: return NSColor(red: 0.42, green: 0.86, blue: 0.72, alpha: 1)
         case .soniox: return NSColor(red: 0.33, green: 0.68, blue: 1.0, alpha: 1)
+        case .elevenlabs: return NSColor(red: 0.66, green: 0.52, blue: 1.0, alpha: 1)
         }
     }
     var color: Color { Color(nsColor: nsColor) }
@@ -1238,6 +1293,14 @@ struct Card {
 
 func pctText(_ p: Double) -> String { "\(Int(p.rounded())) %" }
 
+/// 12.340 · 1,2 M
+func creditsText(_ v: Double) -> String {
+    if v >= 1_000_000 { return String(format: "%.1f M", v / 1_000_000).replacingOccurrences(of: ".", with: ",") }
+    let f = NumberFormatter(); f.locale = Locale(identifier: "es_ES"); f.numberStyle = .decimal; f.maximumFractionDigits = 0
+    f.usesGroupingSeparator = true; f.groupingSize = 3
+    return f.string(from: NSNumber(value: v.rounded())) ?? "\(Int(v))"
+}
+
 extension UsageModel {
     func card(_ s: Service) -> Card {
         switch s {
@@ -1245,7 +1308,27 @@ extension UsageModel {
         case .chatgpt: return subscriptionCard(s, gptRows, gptError)
         case .openai: return apiCard(s, openai ?? moniWallet("openai"), openaiError)
         case .soniox: return apiCard(s, soniox ?? moniWallet("soniox"), sonioxError)
+        case .elevenlabs: return creditsCard(s, eleven, elevenError)
         }
+    }
+
+    /// ElevenLabs: créditos del plan, con su reinicio
+    func creditsCard(_ s: Service, _ e: ElevenCredits?, _ error: String?) -> Card {
+        var c = Card(service: s)
+        c.error = error
+        guard let e = e else { c.caption = "sin datos"; return c }
+        c.hasData = true
+        c.level = e.percent
+        c.headline = pctText(e.percent)
+        c.short = "\(Int(e.percent.rounded()))%"
+        c.caption = "de los créditos" + (e.tier.isEmpty ? "" : " (\(e.tier))")
+        let left = max(0, e.limit - e.used)
+        c.compact = "créditos \(Int(e.percent.rounded()))% · quedan \(creditsText(left))"
+        c.lines = [CardLine(id: "creditos", label: "Créditos usados", percent: e.percent,
+                            value: "\(creditsText(e.used)) de \(creditsText(e.limit))", reset: e.resetAt, window: e.window,
+                            shortLabel: "Créditos", shortValue: pctText(e.percent))]
+        if e.percent >= 100 { c.exhaustedUntil = e.resetAt }
+        return c
     }
 
     /// Si no hay saldo, al menos el gasto del mes que calcula el cerebro de Moni
@@ -1532,6 +1615,7 @@ struct WidgetActions {
     let loginClaude: () -> Void
     let loginOpenAI: () -> Void
     let sonioxKey: () -> Void
+    let elevenKey: () -> Void
     let setKey: () -> Void
     let clearKey: () -> Void
     let quit: () -> Void
@@ -1833,6 +1917,7 @@ struct WidgetView: View {
         Button("Iniciar sesión en claude.ai…") { actions.loginClaude() }
         Button("Iniciar sesión en OpenAI (saldo de la API)…") { actions.loginOpenAI() }
         Button("Clave de la API de Soniox…") { actions.sonioxKey() }
+        Button("Clave de la API de ElevenLabs…") { actions.elevenKey() }
         Menu("Más opciones de Claude") {
             Button("Configurar sessionKey de claude.ai…") { actions.setKey() }
             Button("Borrar sessionKey") { actions.clearKey() }
@@ -2027,7 +2112,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func loadConfigs() -> [PanelConfig] {
         let d = UserDefaults.standard
         if let data = d.data(forKey: "panels.v2"),
-           let list = try? JSONDecoder().decode([PanelConfig].self, from: data), !list.isEmpty {
+           var list = try? JSONDecoder().decode([PanelConfig].self, from: data), !list.isEmpty {
+            // Una vez: ElevenLabs aparece en los widgets que ya mostraban las APIs
+            if !d.bool(forKey: "added.elevenlabs") {
+                d.set(true, forKey: "added.elevenlabs")
+                for i in list.indices where list[i].services.contains(.soniox) && !list[i].services.contains(.elevenlabs) {
+                    list[i].services.append(.elevenlabs)
+                }
+            }
             return list
         }
         var c = PanelConfig()
@@ -2058,6 +2150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             loginClaude: { WebSession.shared.showLogin() },
             loginOpenAI: { PlatformSession.shared.showLogin() },
             sonioxKey: { [weak self] in DispatchQueue.main.async { self?.askSonioxKey() } },
+            elevenKey: { [weak self] in DispatchQueue.main.async { self?.askElevenKey() } },
             setKey: { [weak self] in DispatchQueue.main.async { self?.askSessionKey() } },
             clearKey: { [weak self] in
                 KeychainStore.delete()
@@ -2135,6 +2228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ]
         model.openai = Wallet(available: 7.30, used: 42.70, granted: 50, month: 3.10, source: "OpenAI")
         model.soniox = Wallet(available: 1.20, used: 18.80, granted: 20, month: 4.60, budget: 10, source: "Soniox")
+        model.eleven = ElevenCredits(used: 61_250, limit: 100_000, resetAt: Date().addingTimeInterval(12 * 86400), window: 30 * 86400, tier: "creator")
         model.lastUpdate = now
         renderingShots = true
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -2264,7 +2358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let c = model.card(s)
             if i > 0 { text("  ") }
             icon(Sprites.image(s.sprite, row: Sprites.row(c.level), frame: 0))
-            if s.isAPI {
+            if s.isAPI || s == .elevenlabs {
                 text(" " + (c.hasData ? c.short : "–"))
             } else {
                 let rows = s == .claude ? model.rows : model.gptRows
@@ -2299,6 +2393,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         KeychainStore.save(value)
         UserDefaults.standard.removeObject(forKey: "orgId")
         model.refresh()
+    }
+
+    func askElevenKey() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Clave de la API de ElevenLabs"
+        alert.informativeText = "Crea una clave en elevenlabs.io › Developers › API Keys con permiso de lectura en «User» (lo demás puede quedar sin acceso). Con ella el widget lee los créditos usados y cuándo se reinician. Se guarda solo en este Mac. Déjala vacía para borrarla."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
+        field.stringValue = ""
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Guardar")
+        alert.addButton(withTitle: "Cancelar")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.isEmpty { Secret.delete(ElevenAPI.account); model.eleven = nil } else { Secret.save(value, ElevenAPI.account) }
+        model.refreshAPIs(force: true)
+        let ok = NSAlert()
+        ok.messageText = value.isEmpty ? "Clave de ElevenLabs borrada" : "Clave de ElevenLabs guardada"
+        ok.informativeText = value.isEmpty ? "" : "Empieza por \(Secret.hint(ElevenAPI.account)) y tiene \(value.count) caracteres."
+        ok.runModal()
     }
 
     func askSonioxKey() {

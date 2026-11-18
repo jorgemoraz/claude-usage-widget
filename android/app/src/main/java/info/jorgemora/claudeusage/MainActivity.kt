@@ -31,6 +31,7 @@ class MainActivity : Activity() {
     private lateinit var list: LinearLayout
     private lateinit var openaiButton: Button
     private lateinit var sonioxButton: Button
+    private lateinit var elevenButton: Button
     private lateinit var updateButton: Button
     private lateinit var moniButton: Button
     private lateinit var batteryButton: Button
@@ -79,6 +80,8 @@ class MainActivity : Activity() {
         root.addView(openaiButton)
         sonioxButton = button("") { soniox() }
         root.addView(sonioxButton)
+        elevenButton = button("") { eleven() }
+        root.addView(elevenButton)
         root.addView(button("Actualizar ahora") { refresh() })
         moniButton = button("") { connectMoni() }
         root.addView(moniButton)
@@ -154,6 +157,25 @@ class MainActivity : Activity() {
             }.show()
     }
 
+    /** ElevenLabs: clave de API con permiso de lectura en «User». Se guarda solo en este móvil. */
+    private fun eleven() {
+        val field = android.widget.EditText(this).apply { hint = "Clave de la API de ElevenLabs" }
+        val b = android.app.AlertDialog.Builder(this)
+            .setTitle("API de ElevenLabs")
+            .setMessage("Crea una clave en elevenlabs.io › Developers › API Keys con permiso de lectura en «User». Solo se usa para leer los créditos y se queda en este móvil.")
+            .setView(field)
+            .setPositiveButton("Guardar") { _, _ ->
+                val k = field.text.toString().trim()
+                if (k.length < 10) android.widget.Toast.makeText(this, "Esa clave no parece válida", android.widget.Toast.LENGTH_LONG).show()
+                else { Wallets.setSecret(this, Eleven.KEY, k); refresh() }
+            }
+            .setNegativeButton("Cancelar", null)
+        if (Wallets.secret(this, Eleven.KEY) != null) b.setNeutralButton("Borrar la clave") { _, _ ->
+            Wallets.setSecret(this, Eleven.KEY, null); show(); Widgets.updateAll(this)
+        }
+        b.show()
+    }
+
     /** Soniox: clave de API (console.soniox.com › API keys). Se guarda solo en este móvil. */
     private fun soniox() {
         val field = android.widget.EditText(this).apply {
@@ -213,6 +235,7 @@ class MainActivity : Activity() {
         list.removeAllViews()
         Cards.all(this).forEach { card -> list.addView(cardView(card)) }
         openaiButton.text = if (OpenAI.hasSession(this)) "API de OpenAI…" else "Iniciar sesión en OpenAI (saldo de la API)"
+        elevenButton.text = if (Wallets.secret(this, Eleven.KEY) != null) "Clave de la API de ElevenLabs…" else "Pegar la clave de la API de ElevenLabs"
         sonioxButton.text = if (Wallets.secret(this, Soniox.KEY) != null) "Clave de la API de Soniox…" else "Pegar la clave de la API de Soniox"
         moniButton.text = if (Gastos.configured(this)) "Gastos de Moni…" else "Conectar con Moni (gastos del mes)"
         val sb = StringBuilder()

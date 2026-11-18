@@ -7,7 +7,9 @@ enum class Service(val key: String, val title: String, val short: String, val sp
     CLAUDE("claude", "Claude", "Claude", "claude", 0xFFE3876A.toInt(), false),
     CHATGPT("gpt", "ChatGPT", "GPT", "chatgpt", 0xFF4DC79E.toInt(), false),
     OPENAI("openai", "API OpenAI", "OpenAI", "chatgpt", 0xFF7FD6B8.toInt(), true),
-    SONIOX("soniox", "API Soniox", "Soniox", "soniox", 0xFF6FA8FF.toInt(), true);
+    SONIOX("soniox", "API Soniox", "Soniox", "soniox", 0xFF6FA8FF.toInt(), true),
+    /** Créditos del plan, con reinicio: se pinta como una suscripción */
+    ELEVEN("elevenlabs", "ElevenLabs", "11Labs", "elevenlabs", 0xFFA885FF.toInt(), false);
 
     companion object {
         fun from(key: String) = entries.firstOrNull { it.key == key }
@@ -87,7 +89,7 @@ object Cards {
         return Card(
             s, true, rows.maxOf { it.percent },
             week?.let { pct(it.percent) } ?: session?.let { pct(it.percent) } ?: "–",
-            session?.let { "5h ${pct(it.percent)}" } ?: "",
+            if (s == Service.ELEVEN) Store.extra(c, s.key) ?: "créditos" else session?.let { "5h ${pct(it.percent)}" } ?: "",
             lines, err, Store.updated(c, s.key),
         )
     }

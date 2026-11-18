@@ -26,6 +26,8 @@ class Capturas {
             Row("Sesión (5 h)", 8.0, now + 4 * 3600_000, 18000),
             Row("Semana", 92.0, now + 86400_000, 604800)), null)
         Wallets.save(c, "openai", Wallet(available = 7.4, used = 12.6, granted = 20.0, month = 3.2, source = "OpenAI"), null)
+        Store.save(c, "elevenlabs", listOf(Row("Créditos", 61.0, now + 12 * 86400_000, 30 * 86400)), null)
+        Store.setExtra(c, "elevenlabs", "quedan 38.750 de 100.000")
         Wallets.save(c, "soniox", null, "Falta la clave de Soniox: ábrela en la app")
         val dir = File(c.getExternalFilesDir(null), "shots").apply { mkdirs() }
         val d = c.resources.displayMetrics.density

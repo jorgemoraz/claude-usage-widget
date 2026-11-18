@@ -31,6 +31,8 @@ object Store {
         prefs(c).getString(key, null)?.let { runCatching { fromJson(it) }.getOrNull() } ?: emptyList()
 
     fun error(c: Context, key: String): String? = prefs(c).getString(key + "_err", null)
+    fun extra(c: Context, key: String): String? = prefs(c).getString(key + "_extra", null)
+    fun setExtra(c: Context, key: String, v: String) = prefs(c).edit().putString(key + "_extra", v).apply()
     fun updated(c: Context, key: String): Long = prefs(c).getLong(key + "_at", 0)
 
     private fun toJson(rows: List<Row>): String = JSONArray().apply {

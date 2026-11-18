@@ -33,7 +33,7 @@ class ConfigActivity : Activity() {
         val current = Widgets.services(this, id)
         val boxes = Service.entries.map { s ->
             CheckBox(this).apply {
-                text = s.title + if (s.isAPI) "  (saldo y gasto)" else "  (5 horas y semana)"
+                text = s.title + when { s == Service.ELEVEN -> "  (créditos del plan)"; s.isAPI -> "  (saldo y gasto)"; else -> "  (5 horas y semana)" }
                 textSize = 17f; setTextColor(Color.WHITE)
                 isChecked = s in current
                 setPadding(0, (10 * d).toInt(), 0, (10 * d).toInt())

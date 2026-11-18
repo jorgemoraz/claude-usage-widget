@@ -173,7 +173,7 @@ object Fetch {
             val r = async { runCatching { Http.claude(c) }.getOrNull() }
             val g = async { runCatching { Http.gpt(c) }.getOrNull() }
             handle(c, "claude", "claude.ai", r.await(), Parse::claude)
-            val s = async { runCatching { Soniox.fetch(c) } }
+            val s = async { runCatching { Soniox.fetch(c) }; runCatching { Eleven.fetch(c) } }
             val o = async { runCatching { OpenAI.fetch(c, foreground = false) } }
             handle(c, "gpt", "chatgpt.com", g.await(), Parse::gpt)
             s.await(); o.await()
@@ -193,6 +193,7 @@ object Fetch {
             handle(c, "gpt", "chatgpt.com", g, Parse::gpt)
         }
         runCatching { Soniox.fetch(c) }
+        runCatching { Eleven.fetch(c) }
         runCatching { OpenAI.fetch(c, foreground) }
         runCatching { Gastos.fetch(c) }
         runCatching { Widgets.updateAll(c) }

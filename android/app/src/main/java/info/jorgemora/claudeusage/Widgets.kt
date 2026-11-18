@@ -67,7 +67,12 @@ object Widgets {
     private fun prefs(c: Context) = c.getSharedPreferences("widgets", Context.MODE_PRIVATE)
 
     fun services(c: Context, id: Int): List<Service> {
-        val s = prefs(c).getString("s_$id", null) ?: return Service.entries.toList()
+        var s = prefs(c).getString("s_$id", null) ?: return Service.entries.toList()
+        // Una vez: ElevenLabs aparece en los widgets que ya mostraban las APIs
+        if (!prefs(c).getBoolean("el_$id", false)) {
+            if (s.contains("soniox") && !s.contains("elevenlabs")) s += ",elevenlabs"
+            prefs(c).edit().putString("s_$id", s).putBoolean("el_$id", true).apply()
+        }
         return s.split(",").mapNotNull { Service.from(it) }.ifEmpty { Service.entries.toList() }
     }
 
@@ -120,6 +125,7 @@ object Widgets {
         v.setTextViewText(R.id.name, when {
             wide -> card.service.title
             narrow || card.service.isAPI || !card.hasData -> card.service.short
+            card.service == Service.ELEVEN -> card.service.short
             else -> card.service.short + " · sem"
         })
         v.setTextColor(R.id.name, card.service.color)
@@ -129,6 +135,7 @@ object Widgets {
         val small = when {
             !card.hasData -> card.error ?: "sin datos"
             card.service.isAPI -> if (wide && card.small.startsWith("mes")) "saldo · ${card.small}" else tight(card.small)
+            card.service == Service.ELEVEN -> card.small
             wide -> "semana · ${card.small}"
             else -> tight(card.small)
         }

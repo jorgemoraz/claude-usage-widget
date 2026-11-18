@@ -49,7 +49,7 @@ curl -fsSL "https://raw.githubusercontent.com/${REPO}/${SHA}/main.swift" -o "$BU
 
 echo "Descargando personajes…"
 mkdir -p "$APP/Contents/Resources/sprites"
-for w in claude chatgpt soniox; do
+for w in claude chatgpt soniox elevenlabs; do
   for r in 0 1 2 3; do
     for c in 0 1 2; do
       curl -fsSL "https://raw.githubusercontent.com/${REPO}/${SHA}/sprites/$w-$r-$c.png" \

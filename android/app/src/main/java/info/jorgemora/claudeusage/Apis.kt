@@ -214,3 +214,35 @@ object OpenAI {
         }
     }
 }
+
+/** ElevenLabs: créditos del plan con su API oficial (clave con permiso de lectura en «User») */
+object Eleven {
+    const val KEY = "elevenlabs"
+
+    private fun num(n: Double): String = if (n >= 1_000_000) String.format(Locale("es", "ES"), "%.1f M", n / 1_000_000)
+        else java.text.NumberFormat.getIntegerInstance(Locale("es", "ES")).format(n.toLong())
+
+    suspend fun fetch(c: Context) = withContext(Dispatchers.IO) {
+        val k = Wallets.secret(c, KEY) ?: return@withContext Store.save(c, KEY, null, "Falta la clave de ElevenLabs: ábrela en la app")
+        try {
+            val r = httpGet("https://api.elevenlabs.io/v1/user/subscription", mapOf("xi-api-key" to k))
+            when (r.status) {
+                200 -> {
+                    val o = JSONObject(r.body)
+                    val used = o.num("character_count") ?: error("sin datos")
+                    val limit = o.num("character_limit") ?: error("sin datos")
+                    val reset = o.num("next_character_count_reset_unix")?.let { (it * 1000).toLong() }
+                    val period = o.optString("character_refresh_period").ifEmpty { o.optString("billing_period") }
+                    val days = when { period.startsWith("3_") -> 91L; period.startsWith("6_") -> 182L; period.startsWith("annual") -> 365L; else -> 30L }
+                    val p = if (limit > 0) (100 * used / limit).coerceIn(0.0, 100.0) else 0.0
+                    Store.save(c, KEY, listOf(Row("Créditos", p, reset, days * 86400)), null)
+                    Store.setExtra(c, KEY, "quedan ${num((limit - used).coerceAtLeast(0.0))} de ${num(limit)}")
+                }
+                401, 403 -> Store.save(c, KEY, null, "ElevenLabs no acepta la clave (necesita lectura de «User»)")
+                else -> Store.save(c, KEY, null, "ElevenLabs respondió ${r.status}")
+            }
+        } catch (_: Exception) {
+            Store.save(c, KEY, null, "Sin respuesta de ElevenLabs")
+        }
+    }
+}
