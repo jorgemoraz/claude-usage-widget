@@ -33,6 +33,15 @@ class MainActivity : Activity() {
     private lateinit var sonioxButton: Button
     private lateinit var updateButton: Button
     private lateinit var moniButton: Button
+    private lateinit var batteryButton: Button
+
+    private fun ignoringBattery() = getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+
+    @android.annotation.SuppressLint("BatteryLife")
+    private fun askBattery() {
+        runCatching { startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) }
+            .onFailure { startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+    }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
 
@@ -78,6 +87,9 @@ class MainActivity : Activity() {
         root.addView(text("Para añadir el widget: mantén pulsado el escritorio › Widgets › Uso de Claude. Hay dos: el grande y el de una fila; los dos se adaptan al tamaño (estíralos). Tócalo para actualizar; toca un personaje para abrir esta pantalla. Para elegir qué servicios muestra cada uno: mantén pulsado el widget › Configuración.", 13f, 0xFF8F8786.toInt()))
         updateButton = button("Buscar actualización") { openLatest() }
         root.addView(updateButton)
+        // Samsung duerme las apps en segundo plano y entonces el widget deja de actualizarse
+        batteryButton = button("Dejar que se actualice en segundo plano") { askBattery() }
+        root.addView(batteryButton)
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(0xFF1C1817.toInt())
@@ -90,7 +102,8 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         show()
-        SelfUpdate.status(this)?.let { updateButton.text = it }
+        batteryButton.visibility = if (ignoringBattery()) android.view.View.GONE else android.view.View.VISIBLE
+        updateButton.text = SelfUpdate.status(this) ?: "Versión ${SelfUpdate.current(this)} · buscar actualización"
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
         // Al abrir la app, si hay versión nueva y ya hay permiso, se instala sola
@@ -257,6 +270,9 @@ class MainActivity : Activity() {
         if (card.lines.isNotEmpty()) card.error?.let { e ->
             col.addView(TextView(this).apply { text = "⚠︎ $e"; setTextColor(0xFFFFB366.toInt()); textSize = 12f })
         }
+        if (card.updated > 0) col.addView(TextView(this).apply {
+            text = "Dato de las ${hourText(card.updated)}"; setTextColor(0xFF8F8786.toInt()); textSize = 12f
+        })
         row.addView(col)
         return row
     }

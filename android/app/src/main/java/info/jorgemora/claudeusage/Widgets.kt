@@ -26,6 +26,8 @@ abstract class BaseWidget : AppWidgetProvider() {
     override fun onUpdate(c: Context, m: AppWidgetManager, ids: IntArray) {
         ids.forEach { Widgets.render(c, m, it) }
         Scheduler.schedule(c)
+        // Respaldo cada 30 minutos (updatePeriodMillis) por si el sistema retrasa la tarea periódica
+        Scheduler.soon(c)
     }
 
     override fun onAppWidgetOptionsChanged(c: Context, m: AppWidgetManager, id: Int, o: Bundle) {
@@ -45,16 +47,9 @@ abstract class BaseWidget : AppWidgetProvider() {
         super.onReceive(c, intent)
         if (intent.action == Widgets.ACTION_REFRESH) {
             Widgets.updateAll(c, refreshing = true)
-            // Consulta al momento, sin esperar a que Android programe la tarea
-            val pending = goAsync()
-            CoroutineScope(Dispatchers.IO).launch {
-                val ok = withTimeoutOrNull(40_000) { Fetch.quick(c); true } ?: false
-                if (!ok) {
-                    runCatching { Widgets.updateAll(c) }
-                    Scheduler.now(c)
-                }
-                pending.finish()
-            }
+            // Android solo da unos segundos a un toque de widget: la consulta va en una tarea urgente
+            // de WorkManager, que no se corta a medias como pasaba antes
+            Scheduler.now(c)
         }
     }
 }
@@ -220,8 +215,10 @@ object Widgets {
                     cards.take(fit).forEach { v.addView(R.id.cells, compact(c, it, R.layout.cell_list, w >= 250, w < 140, showSmall)) }
                 }
             }
-            val at = cards.maxOfOrNull { it.updated } ?: 0L
-            v.setTextViewText(R.id.footer, when {
+            val at = cards.filter { it.updated > 0 }.minOfOrNull { it.updated } ?: 0L
+            val stale = at > 0 && System.currentTimeMillis() - at > 45 * 60_000
+            val warn = if (stale || cards.any { it.error != null }) "⚠︎ " else ""
+            v.setTextViewText(R.id.footer, warn + when {
                 refreshing -> "Actualizando…"
                 at > 0 && w < 250 -> "Actualizado ${hourText(at)}"
                 at > 0 -> "Actualizado ${hourText(at)} · toca para actualizar"

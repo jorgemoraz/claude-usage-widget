@@ -70,7 +70,11 @@ object Cards {
     fun card(c: Context, s: Service): Card = if (s.isAPI) api(c, s) else subscription(c, s)
 
     private fun subscription(c: Context, s: Service): Card {
-        val rows = Store.rows(c, s.key)
+        val now = System.currentTimeMillis()
+        // Un dato de antes del reinicio ya no vale: tras el reinicio el uso vuelve a 0
+        val rows = Store.rows(c, s.key).map { r ->
+            if (r.resetAt != null && r.resetAt <= now) r.copy(percent = 0.0, resetAt = null) else r
+        }
         val err = Store.error(c, s.key)
         if (rows.isEmpty()) return Card(s, false, null, "–", "sin datos", emptyList(), err, 0)
         val session = rows.firstOrNull { !it.isWeek }

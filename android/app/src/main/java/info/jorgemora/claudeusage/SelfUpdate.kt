@@ -36,7 +36,12 @@ object SelfUpdate {
     }.getOrDefault(0)
 
     private fun prefs(c: Context) = c.getSharedPreferences("update", Context.MODE_PRIVATE)
-    fun status(c: Context): String? = prefs(c).getString("status", null)
+    /** Mensaje pendiente, solo mientras siga instalada una versión anterior a la que se estaba instalando */
+    fun status(c: Context): String? {
+        val target = prefs(c).getInt("target", 0)
+        if (target in 1..current(c)) { prefs(c).edit().remove("status").remove("target").apply(); return null }
+        return prefs(c).getString("status", null)
+    }
     private fun setStatus(c: Context, s: String?) = prefs(c).edit().putString("status", s).apply()
 
     suspend fun latest(): Release? = withContext(Dispatchers.IO) {
@@ -106,7 +111,11 @@ object SelfUpdate {
         progress("Descargando la versión ${r.version}…")
         val f = download(c, r) { p -> progress("Descargando la versión ${r.version}… $p %") } ?: return "La descarga ha fallado; lo reintento luego"
         progress("Instalando la versión ${r.version}…")
-        install(c, f, foreground)
+        try { install(c, f, foreground) } catch (e: Exception) {
+            setStatus(c, "No se pudo instalar: ${e.message}")
+            return "No se pudo instalar la versión ${r.version}: ${e.message}"
+        }
+        prefs(c).edit().putInt("target", r.version).apply()
         setStatus(c, "Instalando la versión ${r.version}")
         return "Instalando la versión ${r.version}…"
     }
