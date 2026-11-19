@@ -2154,6 +2154,8 @@ final class DraggableHostingView<Content: View>: NSHostingView<Content> {
                 f.size.height = max(70, f0.height - (p.y - start.y))
                 f.origin.y = f0.maxY - f.size.height
                 w.setFrame(f, display: true)
+                // El contenido sigue al ratón: así la ventana no queda atada a su tamaño anterior
+                onResized?(f.size)
                 if e.type == .leftMouseUp { break }
             }
             onResized?(w.frame.size)
@@ -2184,7 +2186,6 @@ final class PanelController: NSObject {
         hosting = DraggableHostingView(rootView: WidgetView(model: model, settings: settings, actions: acts,
                                                            onControlsRect: { [weak self] r in self?.hosting?.controlsRect = r }))
         hosting.onTap = { acts.refresh() }
-        if #available(macOS 13.0, *) { hosting.sizingOptions = [] }
         hosting.canResize = { [weak self] in self?.settings.cfg.layout == .libre }
         hosting.onResized = { [weak self] size in
             guard let self = self else { return }
