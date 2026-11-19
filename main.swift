@@ -1472,10 +1472,11 @@ struct SpriteView: View {
 // MARK: Formatos
 
 enum WidgetLayout: String, CaseIterable, Identifiable, Codable {
-    case mini, compacto, normal, grande, horizontal, vertical
+    case libre, mini, compacto, normal, grande, horizontal, vertical
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .libre: return "Libre (estíralo desde la esquina)"
         case .mini: return "Mínima expresión"
         case .compacto: return "Pequeño"
         case .normal: return "Normal"
@@ -1493,6 +1494,28 @@ struct PanelConfig: Codable, Equatable {
     var layout: WidgetLayout = .normal
     var zoom: Double = 1
     var onTop = true
+    /// Tarjetas una al lado de otra en vez de una debajo de otra
+    var horizontal = false
+    /// Tamaño de la ventana en el formato libre
+    var width: Double = 520
+    var height: Double = 330
+
+    init(layout: WidgetLayout = .normal) { self.layout = layout }
+
+    enum CodingKeys: String, CodingKey { case id, services, layout, zoom, onTop, horizontal, width, height }
+
+    // Lee también los ajustes guardados por versiones anteriores (sin los campos nuevos)
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        services = (try? c.decodeIfPresent([Service].self, forKey: .services)) ?? Service.allCases
+        layout = (try? c.decodeIfPresent(WidgetLayout.self, forKey: .layout)) ?? .normal
+        zoom = try c.decodeIfPresent(Double.self, forKey: .zoom) ?? 1
+        onTop = try c.decodeIfPresent(Bool.self, forKey: .onTop) ?? true
+        horizontal = try c.decodeIfPresent(Bool.self, forKey: .horizontal) ?? false
+        width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 520
+        height = try c.decodeIfPresent(Double.self, forKey: .height) ?? 330
+    }
 }
 
 final class PanelSettings: ObservableObject {
@@ -1504,10 +1527,41 @@ final class PanelSettings: ObservableObject {
     init(_ c: PanelConfig) { cfg = c }
 
     static let zoomSteps: [Double] = [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2]
-    var canZoomIn: Bool { cfg.zoom < (PanelSettings.zoomSteps.last ?? 2) - 0.001 }
-    var canZoomOut: Bool { cfg.zoom > (PanelSettings.zoomSteps.first ?? 1) + 0.001 }
-    func zoomIn() { if let n = PanelSettings.zoomSteps.first(where: { $0 > cfg.zoom + 0.001 }) { cfg.zoom = n } }
-    func zoomOut() { if let n = PanelSettings.zoomSteps.last(where: { $0 < cfg.zoom - 0.001 }) { cfg.zoom = n } }
+    var canZoomIn: Bool { cfg.layout == .libre || cfg.zoom < (PanelSettings.zoomSteps.last ?? 2) - 0.001 }
+    var canZoomOut: Bool { cfg.layout == .libre || cfg.zoom > (PanelSettings.zoomSteps.first ?? 1) + 0.001 }
+    func zoomIn() {
+        if cfg.layout == .libre { return resize(1.15) }
+        if let n = PanelSettings.zoomSteps.first(where: { $0 > cfg.zoom + 0.001 }) { cfg.zoom = n }
+    }
+    func zoomOut() {
+        if cfg.layout == .libre { return resize(1 / 1.15) }
+        if let n = PanelSettings.zoomSteps.last(where: { $0 < cfg.zoom - 0.001 }) { cfg.zoom = n }
+    }
+    func resize(_ f: Double) {
+        var c = cfg
+        c.width = min(2400, max(160, c.width * f)); c.height = min(1600, max(70, c.height * f))
+        cfg = c
+    }
+
+    /// Botón de horizontal / vertical
+    func toggleOrientation() {
+        var c = cfg
+        switch c.layout {
+        case .horizontal: c.layout = .vertical
+        case .vertical: c.layout = .horizontal
+        case .libre: (c.width, c.height) = (c.height, c.width)
+        default: c.horizontal.toggle()
+        }
+        cfg = c
+    }
+    var isHorizontal: Bool {
+        switch cfg.layout {
+        case .horizontal, .mini: return !(cfg.layout == .mini && cfg.horizontal)
+        case .vertical: return false
+        case .libre: return cfg.width >= cfg.height
+        default: return cfg.horizontal
+        }
+    }
 
     func toggle(_ s: Service) {
         if cfg.services.contains(s) {
@@ -1572,31 +1626,30 @@ struct LineView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4 * k) {
+        VStack(alignment: .leading, spacing: 3 * k) {
             HStack(alignment: .firstTextBaseline) {
                 Text(short ? (line.shortLabel ?? line.label) : line.label)
-                    .font(.system(size: 11 * k, weight: .medium))
+                    .font(.system(size: 10.5 * k, weight: .medium))
                     .foregroundColor(.white.opacity(0.75))
                     .lineLimit(1).minimumScaleFactor(0.7)
                 Spacer(minLength: 4)
                 Text(short ? (line.shortValue ?? line.value) : line.value)
-                    .font(.system(size: (line.percent != nil && line.window != nil ? 17 : 13) * k, weight: .semibold, design: .rounded))
+                    .font(.system(size: (line.percent != nil && line.window != nil ? 15 : 12) * k, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundColor(line.percent.map { usageColor($0) } ?? .white.opacity(0.9))
                     .lineLimit(1).minimumScaleFactor(0.7)
             }
-            if let p = line.percent { UsageBar(percent: p, timeLeft: timeLeft, height: 6 * k) }
-            if showReset, let p = line.percent, let t = timeLeft {
-                Text("Quedan \(Int((100 - p).rounded())) % de uso y \(Int((t * 100).rounded())) % de tiempo")
-                    .font(.system(size: 10 * k, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
-                    .lineLimit(1).minimumScaleFactor(0.7)
-            }
-            if showReset, let r = line.reset {
+            if let p = line.percent { UsageBar(percent: p, timeLeft: timeLeft, height: 5 * k) }
+            if showReset, let p = line.percent, let t = timeLeft, let r = line.reset {
+                Text("Quedan \(Int((100 - p).rounded())) % uso · \(Int((t * 100).rounded())) % tiempo · vuelve \(hourText(r, now: now))")
+                    .font(.system(size: 9.5 * k, weight: .medium))
+                    .foregroundColor(.white.opacity(0.6))
+                    .lineLimit(1).minimumScaleFactor(0.6)
+            } else if showReset, let r = line.reset {
                 Text(resetText(r, now: now))
-                    .font(.system(size: 10 * k))
+                    .font(.system(size: 9.5 * k))
                     .foregroundColor(.white.opacity(0.5))
-                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .lineLimit(1).minimumScaleFactor(0.6)
             }
         }
     }
@@ -1651,6 +1704,8 @@ struct Controls: View {
         button("arrow.clockwise", "Actualizar ahora") { actions.refresh() }
         button("minus", "Más pequeño", enabled: settings.canZoomOut) { settings.zoomOut() }
         button("plus", "Más grande", enabled: settings.canZoomIn) { settings.zoomIn() }
+        button(settings.isHorizontal ? "rectangle.split.1x2" : "rectangle.split.2x1",
+               settings.isHorizontal ? "Poner en vertical" : "Poner en horizontal") { settings.toggleOrientation() }
         button("menubar.arrow.up.rectangle", "Minimizar en la barra de menús") { actions.minimize() }
     }
 
@@ -1660,6 +1715,52 @@ struct Controls: View {
         }
         .background(GeometryReader { g in Color.clear.preference(key: ControlsRectKey.self, value: g.frame(in: .global)) })
         .onPreferenceChange(ControlsRectKey.self) { onRect($0) }
+    }
+}
+
+// MARK: Formato libre
+
+/// Reparte las tarjetas en la cuadrícula que mejor llena la ventana y escala todo el contenido
+/// (letras incluidas) para que quepa: estirar la ventana lo agranda, encogerla lo reduce.
+struct FreeLayout: View {
+    let cards: [Card]
+    let now: Date
+    let card: (Card, CGFloat) -> AnyView
+    let status: String
+
+    static let cardW: CGFloat = 236
+    func cardH(_ c: Card) -> CGFloat { 60 + CGFloat(max(c.lines.count, c.hasData ? 0 : 1)) * 38 }
+
+    var body: some View {
+        GeometryReader { g in
+            let n = max(1, cards.count)
+            let W = g.size.width - 24, H = g.size.height - 34
+            let rowH = cards.map(cardH).max() ?? 120
+            // Columnas que dan la mayor escala posible
+            let best = (1...n).map { cols -> (Int, CGFloat) in
+                let rows = Int((Double(n) / Double(cols)).rounded(.up))
+                let w = CGFloat(cols) * FreeLayout.cardW + CGFloat(cols - 1) * 14
+                let h = CGFloat(rows) * rowH + CGFloat(rows - 1) * 10
+                return (cols, min(W / w, H / h))
+            }.max { $0.1 < $1.1 } ?? (1, 1)
+            let cols = best.0
+            let k = min(2.2, max(0.4, best.1 * 0.97))
+            let rows = Int((Double(n) / Double(cols)).rounded(.up))
+            VStack(alignment: .leading, spacing: 10 * k) {
+                ForEach(0..<rows, id: \.self) { r in
+                    HStack(alignment: .top, spacing: 14 * k) {
+                        ForEach(Array(cards.enumerated()).filter { $0.offset / cols == r }, id: \.element.service) { item in
+                            card(item.element, k).frame(width: FreeLayout.cardW * k, alignment: .topLeading)
+                        }
+                    }
+                }
+                Text(status).font(.system(size: max(8, 8.5 * k))).foregroundColor(.white.opacity(0.4))
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
+            .clipped()
+        }
     }
 }
 
@@ -1673,7 +1774,9 @@ struct WidgetView: View {
 
     var services: [Service] { settings.cfg.services }
     var z: CGFloat { CGFloat(settings.cfg.zoom) }
-    var controlsVertical: Bool { [.compacto, .horizontal].contains(settings.cfg.layout) }
+    var controlsVertical: Bool {
+        [.compacto, .horizontal].contains(settings.cfg.layout) || (settings.cfg.layout == .mini && settings.cfg.horizontal)
+    }
     var controlsAlignment: Alignment {
         settings.cfg.layout == .mini ? .trailing : (controlsVertical ? .trailing : .topTrailing)
     }
@@ -1688,8 +1791,13 @@ struct WidgetView: View {
             let radius: CGFloat = (settings.cfg.layout == .mini ? 23 : 22) * z
             let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
             let worst = services.compactMap { model.card($0).level }.max()
-            content(ctx.date)
-                .fixedSize()
+            Group {
+                if settings.cfg.layout == .libre {
+                    content(ctx.date).frame(width: settings.cfg.width - 2, height: settings.cfg.height - 2)
+                } else {
+                    content(ctx.date).fixedSize()
+                }
+            }
                 .background(
                     ZStack {
                         if renderingShots { Color(red: 0.13, green: 0.12, blue: 0.13) } else { GlassBackground(radius: radius) }
@@ -1706,6 +1814,16 @@ struct WidgetView: View {
                     Controls(settings: settings, actions: actions, vertical: controlsVertical, onRect: onControlsRect)
                         .padding(controlsVertical ? 8 : 9)
                 }
+                .overlay(alignment: .bottomTrailing) {
+                    if settings.cfg.layout == .libre {
+                        // Asa para estirar: arrastrar desde aquí cambia el tamaño
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.white.opacity(0.55))
+                            .padding(6)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .padding(1)
                 .contextMenu { menu }
         }
@@ -1721,26 +1839,26 @@ struct WidgetView: View {
     func headColor(_ c: Card) -> Color { c.hasData ? usageColor(c.level ?? 0) : .white.opacity(0.5) }
 
     // Tarjeta completa de un servicio
-    func cardView(_ c: Card, _ now: Date, k: CGFloat, sprite: CGFloat = 64) -> some View {
-        VStack(alignment: .leading, spacing: 7 * k) {
-            HStack(alignment: .center, spacing: 10 * k) {
+    func cardView(_ c: Card, _ now: Date, k: CGFloat, sprite: CGFloat = 46) -> some View {
+        VStack(alignment: .leading, spacing: 5 * k) {
+            HStack(alignment: .center, spacing: 8 * k) {
                 SpriteView(service: c.service, level: c.level, size: sprite * k)
                 VStack(alignment: .leading, spacing: 1 * k) {
                     Text(c.service.title.uppercased())
-                        .font(.system(size: 9.5 * k, weight: .heavy)).tracking(0.8)
+                        .font(.system(size: 9 * k, weight: .heavy)).tracking(0.8)
                         .foregroundColor(c.service.color)
                     Text(phrase(c, now))
-                        .font(.system(size: 12 * k, weight: .semibold, design: .rounded))
+                        .font(.system(size: 11 * k, weight: .semibold, design: .rounded))
                         .foregroundColor(.white.opacity(0.9))
                         .lineLimit(1).minimumScaleFactor(0.7)
                     HStack(alignment: .firstTextBaseline, spacing: 4 * k) {
                         Text(c.headline)
-                            .font(.system(size: 30 * k, weight: .bold, design: .rounded))
+                            .font(.system(size: 23 * k, weight: .bold, design: .rounded))
                             .monospacedDigit()
                             .foregroundColor(headColor(c))
                             .lineLimit(1).fixedSize()
                         Text(c.caption)
-                            .font(.system(size: 10 * k, weight: .medium))
+                            .font(.system(size: 9.5 * k, weight: .medium))
                             .foregroundColor(.white.opacity(0.55))
                             .lineLimit(2).minimumScaleFactor(0.8)
                     }
@@ -1765,7 +1883,8 @@ struct WidgetView: View {
         let cards = services.map { model.card($0) }
         switch settings.cfg.layout {
         case .mini:
-            HStack(spacing: 10 * z) {
+            let stack = settings.cfg.horizontal ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4 * z)) : AnyLayout(HStackLayout(spacing: 10 * z))
+            stack {
                 ForEach(cards, id: \.service) { c in
                     HStack(spacing: 3 * z) {
                         SpriteView(service: c.service, level: c.level, size: 34 * z)
@@ -1778,10 +1897,11 @@ struct WidgetView: View {
             }
             .padding(.vertical, 5 * z)
             .padding(.leading, 8 * z)
-            .padding(.trailing, 8 * z + 86)
+            .padding(.trailing, 8 * z + (settings.cfg.horizontal ? 30 : 108))
 
         case .compacto:
-            VStack(alignment: .leading, spacing: 7 * z) {
+            let stack = settings.cfg.horizontal ? AnyLayout(HStackLayout(alignment: .top, spacing: 12 * z)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 7 * z))
+            stack {
                 ForEach(cards, id: \.service) { c in
                     HStack(spacing: 8 * z) {
                         SpriteView(service: c.service, level: c.level, size: 40 * z)
@@ -1801,24 +1921,42 @@ struct WidgetView: View {
             }
             .padding(10 * z)
             .padding(.trailing, 28)
-            .frame(width: 250 * z + 28)
+            .frame(width: settings.cfg.horizontal ? nil : 250 * z + 28)
 
         case .normal, .grande:
-            let k: CGFloat = (settings.cfg.layout == .grande ? 1.3 : 1) * z
-            VStack(alignment: .leading, spacing: 12 * k) {
-                ForEach(Array(cards.enumerated()), id: \.element.service) { item in
-                    if item.offset > 0 { separator() }
-                    cardView(item.element, now, k: k)
+            let k: CGFloat = (settings.cfg.layout == .grande ? 1.25 : 1) * z
+            if settings.cfg.horizontal {
+                VStack(alignment: .leading, spacing: 8 * k) {
+                    HStack(alignment: .top, spacing: 12 * k) {
+                        ForEach(Array(cards.enumerated()), id: \.element.service) { item in
+                            if item.offset > 0 { Rectangle().fill(Color.white.opacity(0.10)).frame(width: 0.5) }
+                            cardView(item.element, now, k: k).frame(width: 230 * k)
+                        }
+                    }
+                    Text(statusText(now)).font(.system(size: 8.5 * k)).foregroundColor(.white.opacity(0.4))
                 }
-                if model.showSpend { spendSection(k: k) }
-                Text(statusText(now))
-                    .font(.system(size: 9 * k))
-                    .foregroundColor(.white.opacity(0.4))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(12 * k)
+                .padding(.trailing, 110)
+            } else {
+                VStack(alignment: .leading, spacing: 9 * k) {
+                    ForEach(Array(cards.enumerated()), id: \.element.service) { item in
+                        if item.offset > 0 { separator() }
+                        cardView(item.element, now, k: k)
+                    }
+                    if model.showSpend { spendSection(k: k) }
+                    Text(statusText(now))
+                        .font(.system(size: 8.5 * k))
+                        .foregroundColor(.white.opacity(0.4))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .padding(12 * k)
+                .padding(.top, 12)
+                .frame(width: 270 * k)
             }
-            .padding(14 * k)
-            .padding(.top, 12)
-            .frame(width: 300 * k)
+
+        case .libre:
+            FreeLayout(cards: cards, now: now, card: { c, k in AnyView(cardView(c, now, k: k)) },
+                       status: statusText(now))
 
         case .horizontal:
             HStack(alignment: .top, spacing: 14 * z) {
@@ -1958,6 +2096,14 @@ final class FloatingPanel: NSPanel {
 final class DraggableHostingView<Content: View>: NSHostingView<Content> {
     var controlsRect: CGRect = .zero
     var onTap: (() -> Void)?
+    /// Si devuelve true, la esquina inferior derecha sirve para estirar la ventana
+    var canResize: () -> Bool = { false }
+    var onResized: ((CGSize) -> Void)?
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if canResize() { addCursorRect(NSRect(x: bounds.width - 22, y: isFlipped ? bounds.height - 22 : 0, width: 22, height: 22), cursor: .crosshair) }
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -1966,6 +2112,21 @@ final class DraggableHostingView<Content: View>: NSHostingView<Content> {
         let point = CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)
         if controlsRect.insetBy(dx: -3, dy: -3).contains(point) {
             super.mouseDown(with: event)
+            return
+        }
+        if canResize(), let w = window, point.x > bounds.width - 22, point.y > bounds.height - 22 {
+            let start = NSEvent.mouseLocation
+            let f0 = w.frame
+            while let e = w.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+                let p = NSEvent.mouseLocation
+                var f = f0
+                f.size.width = max(160, f0.width + p.x - start.x)
+                f.size.height = max(70, f0.height - (p.y - start.y))
+                f.origin.y = f0.maxY - f.size.height
+                w.setFrame(f, display: true)
+                if e.type == .leftMouseUp { break }
+            }
+            onResized?(w.frame.size)
             return
         }
         let before = window?.frame.origin
@@ -1993,6 +2154,14 @@ final class PanelController: NSObject {
         hosting = DraggableHostingView(rootView: WidgetView(model: model, settings: settings, actions: acts,
                                                            onControlsRect: { [weak self] r in self?.hosting?.controlsRect = r }))
         hosting.onTap = { acts.refresh() }
+        if #available(macOS 13.0, *) { hosting.sizingOptions = [] }
+        hosting.canResize = { [weak self] in self?.settings.cfg.layout == .libre }
+        hosting.onResized = { [weak self] size in
+            guard let self = self else { return }
+            var c = self.settings.cfg
+            c.width = Double(size.width); c.height = Double(size.height)
+            self.settings.cfg = c
+        }
         panel.contentView = hosting
         panel.setContentSize(fitting())
         settings.onSave = { [weak app] in app?.saveConfigs() }
@@ -2003,6 +2172,7 @@ final class PanelController: NSObject {
     }
 
     func fitting() -> NSSize {
+        if settings.cfg.layout == .libre { return NSSize(width: settings.cfg.width, height: settings.cfg.height) }
         hosting.layoutSubtreeIfNeeded()
         let s = hosting.fittingSize
         return NSSize(width: max(s.width, 60), height: max(s.height, 40))
@@ -2233,8 +2403,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         renderingShots = true
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            for layout in WidgetLayout.allCases {
-                let st = PanelSettings(PanelConfig(layout: layout))
+            var configs = WidgetLayout.allCases.map { (l: WidgetLayout) -> (String, PanelConfig) in (l.rawValue, PanelConfig(layout: l)) }
+            var h = PanelConfig(layout: .normal); h.horizontal = true; configs.append(("normal-horizontal", h))
+            var tall = PanelConfig(layout: .libre); tall.width = 300; tall.height = 760; configs.append(("libre-vertical", tall))
+            var small = PanelConfig(layout: .libre); small.width = 900; small.height = 240; configs.append(("libre-ancho", small))
+            for (name, cfg) in configs {
+                let layout = name
+                let st = PanelSettings(cfg)
                 let view = WidgetView(model: self.model, settings: st, actions: self.actions(for: self.panels[0]), onControlsRect: { _ in })
                     .padding(20)
                     .background(Color(red: 0.55, green: 0.6, blue: 0.68))
@@ -2242,8 +2417,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 r.scale = 2
                 if let img = r.nsImage, let tiff = img.tiffRepresentation,
                    let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) {
-                    try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(layout.rawValue).png"))
-                    print("[captura] \(layout.rawValue) \(img.size)")
+                    try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(layout).png"))
+                    print("[captura] \(layout) \(img.size)")
                 }
             }
             fflush(stdout)
