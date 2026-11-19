@@ -13,7 +13,7 @@ jobs:
       - name: Prueba de tamaño
         run: |
           defaults write ClaudeUsage zoom -float 1 || true
-          (WIDGET_SELFTEST=1 ./ClaudeUsage > test.log 2>&1 &) ; sleep 12; cat test.log; pkill ClaudeUsage || true
+          (WIDGET_SELFTEST=1 ./ClaudeUsage > test.log 2>&1 &) ; sleep 12; cat test.log; pkill ClaudeUsage || true; if grep -q "ventana=(60.0, 40.0)" test.log; then echo "::error::La ventana sale diminuta"; exit 1; fi
       - name: Capturas de los formatos
         run: |
           (WIDGET_SELFTEST=1 WIDGET_SHOTS="$PWD/capturas" WIDGET_SPRITES="$PWD/sprites" ./ClaudeUsage > shots.log 2>&1 &) ; sleep 15; cat shots.log; pkill ClaudeUsage || true
