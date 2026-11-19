@@ -1722,42 +1722,72 @@ struct Controls: View {
 
 /// Reparte las tarjetas en la cuadrícula que mejor llena la ventana y escala todo el contenido
 /// (letras incluidas) para que quepa: estirar la ventana lo agranda, encogerla lo reduce.
+struct CardHeightsKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) { value.merge(nextValue()) { $1 } }
+}
+
 struct FreeLayout: View {
     let cards: [Card]
     let now: Date
     let card: (Card, CGFloat) -> AnyView
     let status: String
+    /// Alto real de cada tarjeta a tamaño 1, medido sin mostrarla
+    @State private var heights: [Int: CGFloat] = [:]
 
     static let cardW: CGFloat = 236
-    func cardH(_ c: Card) -> CGFloat { 60 + CGFloat(max(c.lines.count, c.hasData ? 0 : 1)) * 38 }
+    static let gapX: CGFloat = 14, gapY: CGFloat = 10, top: CGFloat = 32, side: CGFloat = 12, foot: CGFloat = 16
+
+    func h(_ i: Int) -> CGFloat { heights[i] ?? (60 + CGFloat(cards[i].lines.count) * 34) }
+
+    /// Tamaño de la cuadrícula a escala 1 con cierto número de columnas
+    func gridSize(_ cols: Int) -> CGSize {
+        let n = cards.count
+        let rows = Int((Double(n) / Double(cols)).rounded(.up))
+        var hh: CGFloat = 0
+        for r in 0..<rows { hh += (r * cols..<min(n, (r + 1) * cols)).map(h).max() ?? 0 }
+        return CGSize(width: CGFloat(cols) * FreeLayout.cardW + CGFloat(cols - 1) * FreeLayout.gapX,
+                      height: hh + CGFloat(rows - 1) * FreeLayout.gapY + FreeLayout.foot)
+    }
 
     var body: some View {
         GeometryReader { g in
             let n = max(1, cards.count)
-            let W = g.size.width - 24, H = g.size.height - 34
-            let rowH = cards.map(cardH).max() ?? 120
-            // Columnas que dan la mayor escala posible
+            let W = g.size.width - 2 * FreeLayout.side, H = g.size.height - FreeLayout.top - 10
+            // Columnas que dan la mayor escala posible; la escala se aplica a letras, barras y personajes
             let best = (1...n).map { cols -> (Int, CGFloat) in
-                let rows = Int((Double(n) / Double(cols)).rounded(.up))
-                let w = CGFloat(cols) * FreeLayout.cardW + CGFloat(cols - 1) * 14
-                let h = CGFloat(rows) * rowH + CGFloat(rows - 1) * 10
-                return (cols, min(W / w, H / h))
+                let sz = gridSize(cols)
+                return (cols, min(W / sz.width, H / sz.height))
             }.max { $0.1 < $1.1 } ?? (1, 1)
             let cols = best.0
-            let k = min(2.2, max(0.4, best.1 * 0.97))
-            let rows = Int((Double(n) / Double(cols)).rounded(.up))
-            VStack(alignment: .leading, spacing: 10 * k) {
-                ForEach(0..<rows, id: \.self) { r in
-                    HStack(alignment: .top, spacing: 14 * k) {
-                        ForEach(Array(cards.enumerated()).filter { $0.offset / cols == r }, id: \.element.service) { item in
-                            card(item.element, k).frame(width: FreeLayout.cardW * k, alignment: .topLeading)
-                        }
+            let k = min(2.4, max(0.35, best.1 * 0.98))
+            let rows = Int((Double(cards.count) / Double(cols)).rounded(.up))
+            ZStack(alignment: .topLeading) {
+                // Medición invisible a escala 1
+                VStack(spacing: 0) {
+                    ForEach(Array(cards.enumerated()), id: \.element.service) { item in
+                        card(item.element, 1).frame(width: FreeLayout.cardW, alignment: .topLeading).fixedSize(horizontal: false, vertical: true)
+                            .background(GeometryReader { p in Color.clear.preference(key: CardHeightsKey.self, value: [item.offset: p.size.height]) })
                     }
                 }
-                Text(status).font(.system(size: max(8, 8.5 * k))).foregroundColor(.white.opacity(0.4))
+                .hidden()
+                .frame(width: 1, height: 1, alignment: .topLeading)
+                .clipped()
+                .onPreferenceChange(CardHeightsKey.self) { heights = $0 }
+
+                VStack(alignment: .leading, spacing: FreeLayout.gapY * k) {
+                    ForEach(0..<rows, id: \.self) { r in
+                        HStack(alignment: .top, spacing: FreeLayout.gapX * k) {
+                            ForEach(Array(cards.enumerated()).filter { $0.offset / cols == r }, id: \.element.service) { item in
+                                card(item.element, k).frame(width: FreeLayout.cardW * k, alignment: .topLeading)
+                            }
+                        }
+                    }
+                    Text(status).font(.system(size: max(8, 8.5 * k))).foregroundColor(.white.opacity(0.4))
+                }
+                .padding(.horizontal, FreeLayout.side)
+                .padding(.top, FreeLayout.top)
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
             .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
             .clipped()
         }
