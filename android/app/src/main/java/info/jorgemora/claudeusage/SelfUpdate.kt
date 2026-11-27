@@ -44,6 +44,18 @@ object SelfUpdate {
     }
     private fun setStatus(c: Context, s: String?) = prefs(c).edit().putString("status", s).apply()
 
+    /** Versión que ya se intentó instalar y cuándo: evita reintentar en bucle la misma */
+    fun markTried(c: Context, v: Int) = prefs(c).edit().putInt("tried", v).putLong("triedAt", System.currentTimeMillis()).apply()
+    fun triedRecently(c: Context, v: Int, ms: Long) =
+        prefs(c).getInt("tried", 0) == v && System.currentTimeMillis() - prefs(c).getLong("triedAt", 0) < ms
+
+    /** Tras actualizarse la app: limpia los avisos pendientes */
+    fun clearAfterUpdate(c: Context) {
+        prefs(c).edit().remove("status").remove("target").apply()
+        c.getSystemService(NotificationManager::class.java).cancel(NOTIF)
+        runCatching { File(c.cacheDir, "actualizacion.apk").delete() }
+    }
+
     suspend fun latest(): Release? = withContext(Dispatchers.IO) {
         runCatching {
             val conn = URL(API).openConnection() as HttpURLConnection
@@ -108,6 +120,9 @@ object SelfUpdate {
         val r = latest() ?: return "No he podido consultar GitHub"
         if (r.version <= current(c)) { setStatus(c, null); return "Tienes la última versión (${current(c)})" }
         if (!canInstall(c)) return "Hay versión nueva (${r.version}). Falta darle permiso a la app para instalarla"
+        // En segundo plano, una misma versión se intenta como mucho una vez al día
+        if (!foreground && triedRecently(c, r.version, 24 * 3600_000L)) return "Versión ${r.version} pendiente"
+        markTried(c, r.version)
         progress("Descargando la versión ${r.version}…")
         val f = download(c, r) { p -> progress("Descargando la versión ${r.version}… $p %") } ?: return "La descarga ha fallado; lo reintento luego"
         progress("Instalando la versión ${r.version}…")
@@ -122,6 +137,8 @@ object SelfUpdate {
 
     private fun install(c: Context, f: File, foreground: Boolean) {
         val pi = c.packageManager.packageInstaller
+        // Sesiones a medias de intentos anteriores: fuera, para que no se acumulen
+        pi.mySessions.forEach { runCatching { pi.abandonSession(it.sessionId) } }
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(c.packageName)
             if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
@@ -160,11 +177,32 @@ class InstallResult : BroadcastReceiver() {
                         .onFailure { SelfUpdate.notify(c, "Actualización de Uso de Claude", "Toca para instalarla", confirm) }
                 } else SelfUpdate.notify(c, "Actualización de Uso de Claude lista", "Toca para instalarla", confirm)
             }
-            PackageInstaller.STATUS_SUCCESS -> prefs.edit().remove("status").apply()
+            PackageInstaller.STATUS_SUCCESS -> SelfUpdate.clearAfterUpdate(c)
+            PackageInstaller.STATUS_FAILURE_ABORTED ->
+                prefs.edit().putString("status", "Actualización cancelada · toca para reintentar").apply()
             else -> {
+                val code = i.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)
                 val msg = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "error"
-                prefs.edit().putString("status", "No se pudo instalar: $msg").apply()
+                val hint = when (code) {
+                    PackageInstaller.STATUS_FAILURE_BLOCKED -> " (bloqueada por el móvil: revisa «Bloqueo automático» de Samsung o Play Protect)"
+                    PackageInstaller.STATUS_FAILURE_CONFLICT, PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> " (instálala a mano desde Drive)"
+                    PackageInstaller.STATUS_FAILURE_STORAGE -> " (falta espacio)"
+                    else -> ""
+                }
+                prefs.edit().putString("status", "No se pudo instalar: $msg$hint").apply()
+                SelfUpdate.notify(c, "No se pudo actualizar Uso de Claude", msg + hint, null)
             }
         }
+    }
+}
+
+/** Al instalarse una versión nueva: vuelve a programar la consulta y repinta los widgets */
+class Updated : BroadcastReceiver() {
+    override fun onReceive(c: Context, i: Intent) {
+        if (i.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        SelfUpdate.clearAfterUpdate(c)
+        Scheduler.schedule(c)
+        Scheduler.soon(c)
+        runCatching { Widgets.updateAll(c) }
     }
 }

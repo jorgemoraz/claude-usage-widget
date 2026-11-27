@@ -27,6 +27,8 @@ class MainActivity : Activity() {
 
     private val scope = MainScope()
     private var updating = false
+    private var lastRefresh = 0L
+    private var latestVersion = 0
     private lateinit var status: TextView
     private lateinit var list: LinearLayout
     private lateinit var openaiButton: Button
@@ -71,6 +73,8 @@ class MainActivity : Activity() {
         root.addView(text("Uso de Claude", 28f, bold = true).apply { gravity = Gravity.CENTER_HORIZONTAL })
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
         root.addView(text("Versión $ver", 13f, 0xFF8F8786.toInt()).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        updateButton = button("Buscar actualización") { openLatest() }
+        root.addView(updateButton)
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(4)) }
         root.addView(list)
         root.addView(text("Inicia sesión una vez en cada servicio. Entra con tu correo y escribe el código que te llega; no toques el enlace del correo, porque se abriría en otra app. La ventana se cierra sola al entrar.", 14f, 0xFFB8B0AE.toInt()))
@@ -88,8 +92,6 @@ class MainActivity : Activity() {
         status = text("", 18f)
         root.addView(status)
         root.addView(text("Para añadir el widget: mantén pulsado el escritorio › Widgets › Uso de Claude. Hay dos: el grande y el de una fila; los dos se adaptan al tamaño (estíralos). Tócalo para actualizar; toca un personaje para abrir esta pantalla. Para elegir qué servicios muestra cada uno: mantén pulsado el widget › Configuración.", 13f, 0xFF8F8786.toInt()))
-        updateButton = button("Buscar actualización") { openLatest() }
-        root.addView(updateButton)
         // Samsung duerme las apps en segundo plano y entonces el widget deja de actualizarse
         batteryButton = button("Dejar que se actualice en segundo plano") { askBattery() }
         root.addView(batteryButton)
@@ -107,14 +109,23 @@ class MainActivity : Activity() {
         show()
         batteryButton.visibility = if (ignoringBattery()) android.view.View.GONE else android.view.View.VISIBLE
         updateButton.text = SelfUpdate.status(this) ?: "Versión ${SelfUpdate.current(this)} · buscar actualización"
-        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+        // El permiso de notificaciones se pide una sola vez: pedirlo en cada vuelta a la app la metía en bucle
+        val p = getSharedPreferences("update", MODE_PRIVATE)
+        if (android.os.Build.VERSION.SDK_INT >= 33 && !p.getBoolean("askedNotif", false) &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            p.edit().putBoolean("askedNotif", true).apply()
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
-        // Al abrir la app, si hay versión nueva y ya hay permiso, se instala sola
-        if (SelfUpdate.canInstall(this)) scope.launch {
-            val r = SelfUpdate.latest()
-            if (r != null && r.version > SelfUpdate.current(this@MainActivity)) openLatest()
         }
-        refresh()
+        // Solo se AVISA de la versión nueva; se instala al tocar el botón. Antes se instalaba sola al volver
+        // a la app, y si la instalación fallaba o se cancelaba, volvía a empezar una y otra vez.
+        if (!updating) scope.launch {
+            val r = SelfUpdate.latest() ?: return@launch
+            latestVersion = r.version
+            if (r.version > SelfUpdate.current(this@MainActivity) && !updating && SelfUpdate.status(this@MainActivity) == null)
+                updateButton.text = "⬇︎ Instalar la versión ${r.version}"
+        }
+        // Al volver de un diálogo no hace falta repetir la consulta del uso
+        if (System.currentTimeMillis() - lastRefresh > 60_000) refresh()
     }
 
     override fun onDestroy() {
@@ -203,6 +214,7 @@ class MainActivity : Activity() {
     }
 
     private fun refresh() {
+        lastRefresh = System.currentTimeMillis()
         status.text = "Actualizando…"
         scope.launch {
             Fetch.all(this@MainActivity, foreground = true)
@@ -224,7 +236,9 @@ class MainActivity : Activity() {
         updating = true
         updateButton.isEnabled = false
         scope.launch {
-            val msg = SelfUpdate.run(this@MainActivity, foreground = true) { t -> runOnUiThread { updateButton.text = t } }
+            val msg = runCatching {
+                SelfUpdate.run(this@MainActivity, foreground = true) { t -> runOnUiThread { updateButton.text = t } }
+            }.getOrElse { "No se pudo actualizar: ${it.message}" }
             updateButton.text = msg
             updateButton.isEnabled = true
             updating = false

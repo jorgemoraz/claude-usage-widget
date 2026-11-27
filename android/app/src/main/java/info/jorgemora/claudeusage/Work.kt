@@ -24,7 +24,8 @@ class UsageWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         // Si la consulta directa falla (Cloudflare, sesión caducada…), se repite desde dentro de la web
         runCatching { withTimeoutOrNull(150_000) { Fetch.all(applicationContext, foreground = true) } }
         runCatching { Widgets.updateAll(applicationContext) }
-        // Como mucho cada 3 horas: buscar versión nueva e instalarla (sin preguntar si Android lo permite)
+        // Como mucho cada 3 horas: buscar versión nueva e instalarla (sin preguntar si Android lo permite;
+        // si pide confirmación, deja un aviso). Cada versión se intenta como mucho una vez al día.
         val p = applicationContext.getSharedPreferences("update", Context.MODE_PRIVATE)
         if (System.currentTimeMillis() - p.getLong("checked", 0) > 3 * 3600_000 && SelfUpdate.canInstall(applicationContext)) {
             p.edit().putLong("checked", System.currentTimeMillis()).apply()
